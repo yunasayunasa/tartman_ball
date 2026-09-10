@@ -4,9 +4,9 @@
 
 ## 現在の状態
 
-ゲーム一巡、全5コース、傾き／スティック、ダッシュ／ジャンプ、安全履歴／チェックポイント復帰、独立した記録保存、効果音、支給キャラクターGLBを実装しています。**スマホ／iPad実機受入とPages公開は未実施です。全体検収完了ではありません。**
+ゲーム一巡、全5コース、傾き／スティック、ダッシュ／ジャンプ、安全履歴／チェックポイント復帰、独立した記録保存、効果音、支給キャラクターGLBを実装しています。**Pagesは公開済みです。スマホ／iPad実機受入は未実施で、全体検収は完了していません。**
 
-この成果物はローカルの初期コミットとして保存し、指定済みのGitHubリポジトリを `origin` に設定します。pushと公開は実施していません。発注仕様の原文は [docs/order.md](docs/order.md)、受入結果は [docs/acceptance.md](docs/acceptance.md) にあります。
+この成果物は指定済みのGitHubリポジトリの `main` に保存し、GitHub Pagesから公開しています。発注仕様の原文は [docs/order.md](docs/order.md)、受入結果は [docs/acceptance.md](docs/acceptance.md) にあります。
 
 ## 開発・検証
 
@@ -59,7 +59,7 @@ npm run preview
 4. Actionsの **Verify** が成功したことを確認し、**Deploy Pages → Run workflow** を明示的に実行します。公開workflowは手動起動のみです。
 5. 完了したdeployジョブのURLを実機で開き、[受入表](docs/acceptance.md) のHTTPS・センサー・表示・性能項目を埋めます。
 
-現在、公開URLと公開コミットは存在しません。Actions設定の根拠は [GitHub公式のカスタムワークフロー案内](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) です。
+公開URLは [https://yunasayunasa.github.io/tartman_ball/](https://yunasayunasa.github.io/tartman_ball/) です。今回の公開コミットは `c518f2d2d8ea50f0c85a5ee12f1217f9653494e7`、Pages workflowは成功済みです。更新時の手順とActions設定の根拠は [GitHub公式のカスタムワークフロー案内](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) を参照してください。
 
 ## 構成・引き継ぎ
 

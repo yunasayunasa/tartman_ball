@@ -9,7 +9,7 @@
 | 全コースの両操作方式での実機踏破 | 共通アナログ入力の実物理試験は通過。実際の傾き・タッチは未確認 | 両OSでの試遊                                   |
 | iPad Safari                      | PCの768×1024レイアウト確認のみ                                 | iPad実機                                       |
 | 実機性能                         | 支給GLB込みのPC描画は確認済み、実機性能は未確認                | 合意した端末・目標・測定手順                   |
-| GitHub Pages HTTPS公開           | 手動公開workflowを用意。公開自体は未実行                       | push、Pages設定、公開操作                      |
+| GitHub Pages HTTPS公開           | `https://yunasayunasa.github.io/tartman_ball/` へ公開済み      | 更新時のworkflow再実行、公開後の実機確認       |
 
 OS／ブラウザーの対応下限は勝手に確定していません。正式名は仮称Sky Tart Rollを使用しています。上記未確認を理由に既存機能を減らしていませんが、**発注書の全体受入は未完了**です。
 
