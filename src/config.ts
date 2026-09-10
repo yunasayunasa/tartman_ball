@@ -7,7 +7,7 @@ export const tuning = {
   speed: 9,
   dashSpeed: 15,
   jumpSpeed: 12,
-  damping: 0.52,
+  damping: 0.32,
   airDamping: 0.12,
   deadZone: 1.4,
   fullTilt: 23,

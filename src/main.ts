@@ -250,7 +250,7 @@ function frame(timestamp: number) {
       else {
         accumulator += dt;
         while (accumulator >= tuning.step) {
-          game.step(input.read(tuning.step), now());
+          game.step(view.worldInput(input.read(tuning.step)), now());
           accumulator -= tuning.step;
         }
       }
@@ -303,8 +303,18 @@ async function boot() {
             records: save.records,
             memory: view.renderer.info.memory,
             calls: view.renderer.info.render.calls,
+            simulationTime: game.simulationTime,
+            camera: {
+              x: view.camera.position.x,
+              y: view.camera.position.y,
+              z: view.camera.position.z,
+            },
+            framing: view.framing(),
           }),
-          teleport: (p: { x: number; y: number; z: number }) => game.teleport(p),
+          teleport: (p: { x: number; y: number; z: number }) => {
+            game.teleport(p);
+            view.snap(p);
+          },
           course: () => game.course,
           invalidateHistory: () => {
             game.round.history = [];

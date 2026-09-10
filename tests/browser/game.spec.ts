@@ -10,6 +10,9 @@ type Snapshot = {
   records: Record<string, { time: number; tarts: number }>;
   memory: { geometries: number; textures: number };
   calls: number;
+  simulationTime: number;
+  camera: { x: number; y: number; z: number };
+  framing: { height: number; x: number; y: number };
 };
 declare global {
   interface Window {
@@ -17,9 +20,10 @@ declare global {
       snapshot(): Snapshot;
       teleport(p: { x: number; y: number; z: number }): void;
       course(): {
-        tarts: { id: string; x: number; z: number }[];
-        goal: { x: number; z: number };
-        checkpoints: { x: number; z: number }[];
+        tarts: { id: string; x: number; y: number; z: number }[];
+        goal: { x: number; y: number; z: number };
+        checkpoints: { x: number; y: number; z: number }[];
+        route: { x: number; y: number; z: number }[];
       };
       invalidateHistory(): void;
       pause(): void;
@@ -136,14 +140,15 @@ test('タルト取得→CP通過→履歴なし落下→復帰で取得とCPを�
   await begin(page);
   await page.evaluate(() => {
     const t = window.__test.course().tarts[0];
-    window.__test.teleport({ ...t, y: 0.6 });
+    window.__test.teleport({ ...t, y: t.y + 0.6 });
   });
   await expect.poll(async () => (await snapshot(page)).tarts.length).toBe(1);
   await page.evaluate(() => {
     const cp = window.__test.course().checkpoints[0];
-    window.__test.teleport({ ...cp, y: 0.6 });
+    window.__test.teleport({ ...cp, y: cp.y + 0.6 });
   });
   await expect.poll(async () => (await snapshot(page)).checkpoint).toBe(0);
+  const collectedBeforeFall = (await snapshot(page)).tarts;
   await page.evaluate(() => {
     window.__test.invalidateHistory();
     window.__test.teleport({ x: 80, y: -12, z: -50 });
@@ -151,18 +156,22 @@ test('タルト取得→CP通過→履歴なし落下→復帰で取得とCPを�
   await expect.poll(async () => (await snapshot(page)).falls).toBe(1);
   const state = await snapshot(page);
   expect(state.checkpoint).toBe(0);
-  expect(state.tarts).toHaveLength(1);
-  expect(state.position.x).toBeCloseTo(12);
+  expect(state.tarts).toEqual(collectedBeforeFall);
+  expect(state.position.x).toBeCloseTo(
+    await page.evaluate(() => window.__test.course().checkpoints[0].x),
+    1,
+  );
   await page.evaluate(() => {
     const t = window.__test.course().tarts[0];
-    window.__test.teleport({ ...t, y: 0.6 });
+    window.__test.teleport({ ...t, y: t.y + 0.6 });
   });
-  await expect(page.locator('#tarts')).toContainText('1 /');
+  await expect(page.locator('#tarts')).toContainText(collectedBeforeFall.length + ' /');
 });
 test('ゴールを一度だけ処理し、記録を保存、再読込で保持する', async ({ page }) => {
   await begin(page);
   await page.evaluate(() => {
-    window.__test.teleport({ ...window.__test.course().goal, y: 0.6 });
+    const goal = window.__test.course().goal;
+    window.__test.teleport({ ...goal, y: goal.y + 0.6 });
   });
   await expect(page.locator('.result')).toContainText('空の旅、クリア');
   const first = await snapshot(page);
@@ -178,7 +187,7 @@ test('全収集マークと最初から再挑戦の初期化', async ({ page }) 
   await begin(page);
   const tarts = await page.evaluate(() => window.__test.course().tarts);
   for (let i = 0; i < tarts.length; i++) {
-    await page.evaluate((p) => window.__test.teleport({ ...p, y: 0.6 }), tarts[i]);
+    await page.evaluate((p) => window.__test.teleport({ ...p, y: p.y + 0.6 }), tarts[i]);
     await expect.poll(async () => (await snapshot(page)).tarts.length).toBe(i + 1);
   }
   await page.evaluate(() => window.__test.teleport({ ...window.__test.course().goal, y: 0.6 }));

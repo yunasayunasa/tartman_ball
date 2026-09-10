@@ -6,9 +6,10 @@ export class Save {
   available = true;
   constructor(private storage: Pick<Storage, 'getItem' | 'setItem'>) {
     try {
-      const data = JSON.parse(storage.getItem('sky-tart-roll.v1') || 'null');
-      if (data?.version !== 1) return;
-      for (const [id, value] of Object.entries(data.records ?? {})) {
+      const current = storage.getItem('sky-tart-roll.v2');
+      const data = JSON.parse(current || storage.getItem('sky-tart-roll.v1') || 'null');
+      if (data?.version !== 1 && data?.version !== 2) return;
+      for (const [id, value] of Object.entries(data.version === 2 ? (data.records ?? {}) : {})) {
         const v = value as RecordValue;
         if (
           /^course-[1-5]$/.test(id) &&
@@ -31,8 +32,8 @@ export class Save {
   write() {
     try {
       this.storage.setItem(
-        'sky-tart-roll.v1',
-        JSON.stringify({ version: 1, records: this.records, settings: this.settings }),
+        'sky-tart-roll.v2',
+        JSON.stringify({ version: 2, records: this.records, settings: this.settings }),
       );
       this.available = true;
     } catch {

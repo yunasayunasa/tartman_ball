@@ -82,7 +82,10 @@ describe('ラウンドと復帰', () => {
   it('CP通過後は履歴なしでもスタートに戻らない', () => {
     const r = new Round(courses[0]);
     r.reachCheckpoint(1);
-    expect(r.recover(8, () => false)).toEqual({ ...courses[0].checkpoints[1], y: 0.6 });
+    expect(r.recover(8, () => false)).toEqual({
+      ...courses[0].checkpoints[1],
+      y: courses[0].checkpoints[1].y + 0.6,
+    });
     expect(r.reachCheckpoint(0)).toBe(false);
     expect(r.checkpoint).toBe(1);
   });
@@ -99,7 +102,10 @@ describe('ラウンドと復帰', () => {
     remember(3.1);
     r.recover(5, () => true);
     remember(5.1);
-    expect(r.recover(7, () => true)).toEqual({ ...courses[0].checkpoints[0], y: 0.6 });
+    expect(r.recover(7, () => true)).toEqual({
+      ...courses[0].checkpoints[0],
+      y: courses[0].checkpoints[0].y + 0.6,
+    });
   });
   it('CP更新で古い履歴を消し、履歴容量を制限する', () => {
     const r = new Round(courses[0]);
@@ -123,7 +129,8 @@ describe('ラウンドと復帰', () => {
   it('足場の端とギミックは安全履歴から除外する', () => {
     expect(safeAt({ x: 0, y: 0.52, z: -5 }, courses[0])).toBe(true);
     expect(safeAt({ x: 3.4, y: 0.52, z: -10 }, courses[0])).toBe(false);
-    expect(safeAt({ x: 0, y: 0.52, z: -12 }, courses[2])).toBe(false);
+    const pad = courses[2].pads[0];
+    expect(safeAt({ ...pad, y: (pad.y ?? 0) + 0.52 }, courses[2])).toBe(false);
   });
 });
 describe('保存', () => {
@@ -181,7 +188,7 @@ describe('コースデータ', () => {
     for (const c of courses) {
       expect(c.checkpoints.length).toBeGreaterThan(0);
       expect(new Set(c.tarts.map((t) => t.id)).size).toBe(c.tarts.length);
-      for (const cp of c.checkpoints) expect(safeAt({ ...cp, y: 0.52 }, c)).toBe(true);
+      for (const cp of c.checkpoints) expect(safeAt({ ...cp, y: cp.y + 0.52 }, c)).toBe(true);
     }
   });
 });

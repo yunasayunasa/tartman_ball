@@ -63,7 +63,7 @@ export class Round {
     this.history = [];
     this.lastRecovery = undefined;
     const cp = this.course.checkpoints[this.checkpoint];
-    return cp ? { ...cp, y: 0.6 } : { ...this.course.start };
+    return cp ? { ...cp, y: cp.y + 0.6 } : { ...this.course.start };
   }
   finish(now: number) {
     if (this.phase !== 'playing') return false;
