@@ -1,0 +1,32 @@
+export const tuning = {
+  step: 1 / 120,
+  radius: 0.52,
+  gravity: -19,
+  acceleration: 17,
+  airControl: 0.22,
+  speed: 9,
+  dashSpeed: 15,
+  jumpSpeed: 12,
+  damping: 0.52,
+  airDamping: 0.12,
+  deadZone: 1.4,
+  fullTilt: 23,
+  curve: 1.35,
+  historyInterval: 0.45,
+  stableTime: 0.65,
+  historyAge: 1.2,
+  historyLimit: 28,
+  fallY: -8,
+  recoveryDelay: 0.7,
+  recoveryGuard: 0.65,
+  repeatWindow: 5,
+  repeatLimit: 2,
+};
+// 支給された元GLBを変更せず、実行時の複製クリップだけをその場走行化する。
+export const characterConfig = {
+  url: 'character.glb',
+  runClip: 'NlaTrack',
+  rootMotionNodes: ['Hip'],
+  yaw: 0,
+  height: 0.82,
+};

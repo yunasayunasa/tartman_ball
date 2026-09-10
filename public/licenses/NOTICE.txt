@@ -1,0 +1,13 @@
+Sky Tart Roll third-party notices
+
+Three.js 0.180.0
+Copyright (c) 2010-2025 three.js authors
+Licensed under the MIT License. See three-MIT.txt.
+
+Rapier / @dimforge/rapier3d-compat 0.19.3
+Copyright 2020 Dimforge EURL
+Licensed under the Apache License, Version 2.0. See rapier-Apache-2.0.txt.
+
+The application does not modify the upstream library sources.
+Game geometry and synthesized sound effects are authored for this project.
+The commissioned character asset is supplied by the repository owner and embedded as character.glb.
