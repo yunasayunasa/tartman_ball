@@ -54,6 +54,11 @@ export class View {
   private clouds = new T.Group();
   private time = 0;
   private shadow: T.Mesh;
+  private ballMaterial: T.MeshStandardMaterial;
+  private dashTrail: T.Mesh;
+  private speedLines = new T.Group();
+  private dashVisual = 0;
+  private dashShock = 0;
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new T.WebGLRenderer({
       canvas,
@@ -84,18 +89,45 @@ export class View {
     this.shadow.rotation.x = -Math.PI / 2;
     this.scene.add(this.shadow);
     this.actor.add(this.shell, this.character);
-    const ball = new T.Mesh(
-      new T.SphereGeometry(tuning.radius, 32, 24),
-      material('#b9f4ff', {
-        transparent: true,
-        opacity: 0.18,
-        roughness: 0.12,
-        metalness: 0.25,
-        depthWrite: false,
-      }),
-    );
+    this.ballMaterial = material('#b9f4ff', {
+      transparent: true,
+      opacity: 0.18,
+      roughness: 0.12,
+      metalness: 0.25,
+      depthWrite: false,
+    });
+    const ball = new T.Mesh(new T.SphereGeometry(tuning.radius, 32, 24), this.ballMaterial);
     ball.renderOrder = 3;
     this.shell.add(ball);
+    this.dashTrail = new T.Mesh(
+      new T.ConeGeometry(0.38, 4.5, 12, 1, true),
+      new T.MeshBasicMaterial({
+        color: '#8ff8ff',
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: T.AdditiveBlending,
+      }),
+    );
+    this.dashTrail.rotation.x = -Math.PI / 2;
+    this.dashTrail.position.z = 2.5;
+    this.actor.add(this.dashTrail);
+    for (let i = 0; i < 14; i++) {
+      const line = new T.Mesh(
+        new T.PlaneGeometry(0.025, 0.9 + (i % 4) * 0.3),
+        new T.MeshBasicMaterial({
+          color: '#d9ffff',
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+        }),
+      );
+      line.position.set(((i % 7) - 3) * 0.24, (((i * 5) % 9) - 4) * 0.18, -1.2 - (i % 3) * 0.25);
+      this.speedLines.add(line);
+    }
+    this.speedLines.position.z = -1;
+    this.camera.add(this.speedLines);
+    this.scene.add(this.camera);
     const ringMat = new T.MeshBasicMaterial({ color: '#efffff', transparent: true, opacity: 0.65 });
     for (let i = 0; i < 2; i++) {
       const ring = new T.Mesh(new T.TorusGeometry(0.522, 0.009, 5, 48), ringMat);
@@ -209,7 +241,7 @@ export class View {
     this.checkpoints = [];
     this.particles.forEach((p) => this.scene.remove(p.mesh));
     this.particles = [];
-    const sky = ['#80d3e6', '#b9a9e5', '#131b3a', '#474266', '#eb9b85'][course.theme];
+    const sky = ['#80d3e6', '#e6b36b', '#b9a9e5', '#131b3a', '#474266', '#eb9b85'][course.theme];
     this.renderer.setClearColor(sky);
     if (this.scene.background instanceof T.Texture) this.scene.background.dispose();
     const backdrop = document.createElement('canvas');
@@ -217,9 +249,15 @@ export class View {
     backdrop.height = 256;
     const ctx = backdrop.getContext('2d')!,
       gradient = ctx.createLinearGradient(0, 0, 0, 256);
-    gradient.addColorStop(0, ['#459fcc', '#8e6ebd', '#080e27', '#272943', '#ce6686'][course.theme]);
+    gradient.addColorStop(
+      0,
+      ['#459fcc', '#bd7139', '#8e6ebd', '#080e27', '#272943', '#ce6686'][course.theme],
+    );
     gradient.addColorStop(0.65, sky);
-    gradient.addColorStop(1, ['#d7f4e4', '#ffe9da', '#30446a', '#afa4cb', '#ffe1a9'][course.theme]);
+    gradient.addColorStop(
+      1,
+      ['#d7f4e4', '#ffe0a1', '#ffe9da', '#30446a', '#afa4cb', '#ffe1a9'][course.theme],
+    );
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, 2, 256);
     this.scene.background = new T.CanvasTexture(backdrop);
@@ -514,7 +552,7 @@ export class View {
     ) => {
       const mesh = new T.Mesh(
         geo,
-        material(color, { metalness: theme === 2 || theme === 4 ? 0.3 : 0 }),
+        material(color, { metalness: theme === 3 || theme === 4 ? 0.3 : 0 }),
       );
       mesh.position.set(p.x, p.y, p.z);
       mesh.scale.set(scale.x, scale.y, scale.z);
@@ -547,6 +585,19 @@ export class View {
           leaf.rotation.y = (n * Math.PI) / 2;
         }
       } else if (theme === 1) {
+        const rock = add(new T.ConeGeometry(4 + (i % 3), 14, 5), i % 32 ? '#c88042' : '#e1a456', {
+          x,
+          y: p.y - 3,
+          z: p.z,
+        });
+        rock.rotation.y = i * 0.17;
+        if (i % 32 === 0)
+          add(new T.TorusGeometry(7, 1.2, 6, 18, Math.PI), '#9b5d38', {
+            x: p.x,
+            y: p.y + 1,
+            z: p.z,
+          }).rotation.y = i * 0.04;
+      } else if (theme === 2) {
         add(new T.CylinderGeometry(4, 4, 2, 24), '#dca258', { x, y: p.y - 1, z: p.z });
         add(new T.CylinderGeometry(3.8, 3.8, 0.6, 24), '#fff0cd', { x, y: p.y + 0.3, z: p.z });
         add(new T.SphereGeometry(1.2, 12, 8), '#f57497', { x, y: p.y + 1.5, z: p.z });
@@ -556,7 +607,7 @@ export class View {
           z: p.z,
         });
         candy.rotation.y = 0.4;
-      } else if (theme === 2) {
+      } else if (theme === 3) {
         const height = 12 + (i % 35);
         add(new T.BoxGeometry(7, height, 7), '#253551', { x, y: p.y + height / 2 - 10, z: p.z });
         for (let j = 0; j < 4; j++)
@@ -565,7 +616,7 @@ export class View {
             y: p.y - 7 + (j * height) / 4,
             z: p.z,
           });
-      } else if (theme === 3) {
+      } else if (theme === 4) {
         for (let n = 0; n < 3; n++) {
           const crystal = add(new T.ConeGeometry(2, 10 + n * 3, 5), n % 2 ? '#aceefa' : '#bb87e8', {
             x: x + n * 2,
@@ -609,12 +660,12 @@ export class View {
       });
       arch.rotation.y = Math.atan2(-pad.dx, -pad.dz);
     }
-    if (theme === 1) {
+    if (theme === 2) {
       add(new T.CylinderGeometry(16, 18, 8, 32), '#daa056', { x: 25, y: 4, z: -290 });
       add(new T.CylinderGeometry(15, 15, 2, 32), '#fff0cb', { x: 25, y: 9, z: -290 });
       add(new T.SphereGeometry(4, 16, 12), '#ed698e', { x: 25, y: 12, z: -290 });
     }
-    if (theme === 4) add(new T.SphereGeometry(22, 20, 12), '#ffe1a5', { x: 0, y: 30, z: -1160 });
+    if (theme === 5) add(new T.SphereGeometry(22, 20, 12), '#ffe1a5', { x: 0, y: 30, z: -1160 });
     const moving = course.platforms.find((p) => p.motion)!;
     const branch = course.branches[0];
     const sign = this.label('動く橋 →', '#fff3d4', '#775d4c');
@@ -667,6 +718,7 @@ export class View {
     this.actor.position.set(p.x, p.y, p.z);
   }
   effect(type: GameEvent) {
+    if (type === 'dash') this.dashShock = 1;
     if (type === 'fall' || type === 'recover') return;
     const count = type === 'goal' ? 50 : 12;
     for (let i = 0; i < count; i++) {
@@ -703,10 +755,20 @@ export class View {
     const rotation = game.ball.rotation();
     this.shell.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
     const speed = Math.hypot(v.x, v.z);
+    const dashTarget = game.dashActive && game.round.phase === 'playing' ? 1 : 0;
+    this.dashVisual += (dashTarget - this.dashVisual) * (1 - Math.exp(-dt * (dashTarget ? 14 : 8)));
+    this.dashShock = Math.max(0, this.dashShock - dt / 0.15);
+    this.ballMaterial.emissive.set('#48eaff');
+    this.ballMaterial.emissiveIntensity = this.dashVisual * 1.8;
+    (this.dashTrail.material as T.MeshBasicMaterial).opacity = this.dashVisual * 0.42;
+    this.dashTrail.visible = this.dashVisual > 0.01;
+    this.dashTrail.rotation.y = Math.atan2(v.x, v.z);
+    for (const child of this.speedLines.children)
+      (child as T.Mesh<T.BufferGeometry, T.MeshBasicMaterial>).material.opacity =
+        this.dashVisual * 0.6;
     if (speed > 0.25) {
-      const desired = new T.Quaternion().setFromAxisAngle(
-        new T.Vector3(0, 1, 0),
-        Math.atan2(v.x, v.z),
+      const desired = new T.Quaternion().setFromEuler(
+        new T.Euler(-this.dashVisual * 0.32, Math.atan2(v.x, v.z), 0, 'YXZ'),
       );
       this.character.quaternion.slerp(desired, 1 - Math.exp(-dt * 10));
     }
@@ -752,6 +814,12 @@ export class View {
     this.camera.position
       .copy(this.follow)
       .add(new T.Vector3(Math.sin(yaw) * distance, menu ? 6 : 3, Math.cos(yaw) * distance));
+    if (this.dashShock > 0)
+      this.camera.position.add(
+        new T.Vector3(Math.sin(this.time * 91), Math.cos(this.time * 77), 0).multiplyScalar(
+          this.dashShock * 0.12,
+        ),
+      );
     this.camera.lookAt(
       this.follow.x - Math.sin(yaw) * 3,
       this.follow.y,
@@ -765,6 +833,9 @@ export class View {
       if (particle.life <= 0) this.scene.remove(particle.mesh);
     }
     this.particles = this.particles.filter((p) => p.life > 0);
+    const targetFov = 55 + this.dashVisual * 10;
+    this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-dt * 12));
+    this.camera.updateProjectionMatrix();
     this.renderer.render(this.scene, this.camera);
   }
   resize() {

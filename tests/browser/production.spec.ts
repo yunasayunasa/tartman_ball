@@ -16,9 +16,17 @@ test('本番ビルドをリポジトリ配下から配信し、外部依存な�
   });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('http://127.0.0.1:5178/sky-tart-roll/?test');
-  await expect(page.locator('.course')).toHaveCount(5);
+  await expect(page.locator('.course')).toHaveCount(6);
   await expect(page.locator('#world')).toHaveAttribute('data-character', 'NlaTrack');
   expect(await page.evaluate(() => '__test' in window)).toBe(false);
+  for (let i = 0; i < 6; i++) {
+    await page.locator(`#course-${i}`).click();
+    await expect(page.locator('#start')).toBeVisible();
+    await page.locator('#stick').click();
+    await page.locator('#start').click();
+    await expect(page.locator('#time')).toBeVisible();
+    await page.goto('http://127.0.0.1:5178/sky-tart-roll/?test');
+  }
   await page.locator('#course-0').click();
   await page.locator('#stick').click();
   await page.locator('#start').click();

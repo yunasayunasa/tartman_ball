@@ -33,18 +33,18 @@ declare global {
 const snapshot = (page: Page) => page.evaluate(() => window.__test.snapshot());
 async function begin(page: Page, index = 0) {
   await page.goto('/?test');
-  await expect(page.locator('.course')).toHaveCount(5);
+  await expect(page.locator('.course')).toHaveCount(6);
   await page.locator(`#course-${index}`).click();
   await page.locator('#stick').click();
   await page.locator('#start').click();
   await expect(page.locator('#time')).toBeVisible();
 }
-test('5コースを自由に選択でき、スマホ縦画面からはみ出さない', async ({ page }) => {
+test('6コースを自由に選択でき、スマホ縦画面からはみ出さない', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/?test');
-  await expect(page.locator('.course')).toHaveCount(5);
-  for (let i = 0; i < 5; i++) {
+  await expect(page.locator('.course')).toHaveCount(6);
+  for (let i = 0; i < 6; i++) {
     await page.locator(`#course-${i}`).click();
     await expect(page.locator('#start')).toBeVisible();
     await page.locator('#back').click();
@@ -213,7 +213,7 @@ test('破損した保存データと保存拒否でも遊べる', async ({ page 
 });
 test('繰り返しコース選択しても描画資源が増え続けない', async ({ page }) => {
   await page.goto('/?test');
-  await expect(page.locator('.course')).toHaveCount(5);
+  await expect(page.locator('.course')).toHaveCount(6);
   const before = (await snapshot(page)).memory;
   for (let i = 0; i < 8; i++) {
     await page.locator(`#course-${i % 5}`).click();
@@ -269,7 +269,7 @@ test('ミュートと感度を保存し、再挑戦後も設定を保持する',
 });
 test('スマホ小画面とタブレットの表示資料を生成する', async ({ page }, info) => {
   await page.goto('/?test');
-  await expect(page.locator('.course')).toHaveCount(5);
+  await expect(page.locator('.course')).toHaveCount(6);
   await page.screenshot({ path: info.outputPath('menu.png') });
   await page.locator('#course-3').click();
   await page.locator('#stick').click();

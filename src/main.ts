@@ -68,7 +68,7 @@ function menu() {
   page(
     `<header class="brand"><div class="brand-mark" aria-hidden="true">◒</div><div><span class="eyebrow">A LITTLE JOURNEY ABOVE THE CLOUDS</span><h1>Sky Tart Roll</h1></div></header>
     <p class="intro">空を渡って、タルトを集めよう。<br>スマホの傾きで出かける、小さな空の旅。</p>
-    <div class="section-label"><span>CHOOSE YOUR SKY</span><span>5つのコース、どこからでも。</span></div>
+    <div class="section-label"><span>CHOOSE YOUR SKY</span><span>6つのコース、どこからでも。</span></div>
     <div class="course-list">${courses
       .map((c, i) => {
         const record = save.records[c.id];

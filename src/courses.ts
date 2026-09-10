@@ -2,7 +2,7 @@ import { CatmullRomCurve3, Vector3 } from 'three';
 export type Vec = { x: number; y: number; z: number };
 export type Point = { x: number; z: number; y?: number };
 export type Surface =
-  'grass' | 'wood' | 'cookie' | 'candy' | 'metal' | 'glass' | 'stone' | 'ice' | 'copper';
+  'grass' | 'wood' | 'sand' | 'cookie' | 'candy' | 'metal' | 'glass' | 'stone' | 'ice' | 'copper';
 export type Motion = { kind: 'lift' | 'slide' | 'rotate'; amplitude: number; period: number };
 export type Platform = {
   id: string;
@@ -17,6 +17,7 @@ export type Platform = {
   surface?: Surface;
   motion?: Motion;
   shape?: 'disc' | 'hex';
+  effect?: { kind: 'conveyor' | 'wind'; x: number; z: number; strength: number };
 };
 export type Pad = {
   id: string;
@@ -28,6 +29,8 @@ export type Pad = {
   dz: number;
   w: number;
   d: number;
+  power?: number;
+  duration?: number;
 };
 export type Course = {
   id: string;
@@ -50,6 +53,7 @@ const v = (x: number, z: number, y = 0): Vec => ({ x, y, z });
 export const surfaceColors: Record<Surface, string> = {
   grass: '#72d77c',
   wood: '#c08a57',
+  sand: '#d8a85f',
   cookie: '#edb869',
   candy: '#f69ac5',
   metal: '#36547b',
@@ -175,6 +179,13 @@ const descriptions = [
     '海の冒険 · 2〜3分',
   ],
   [
+    '琥珀砂漠の滑走遺跡',
+    'AMBER SPIRAL',
+    '砂岩の螺旋を滑り、すり鉢と谷の勢いで遺跡を飛び越えよう。',
+    '#d99a4e',
+    '地形滑走 · 3〜4分',
+  ],
+  [
     'お菓子の天空工房',
     'CANDY WORKSHOP',
     'ウエハース橋から回転皿へ。巨大タルトを囲む甘い冒険。',
@@ -221,6 +232,29 @@ const controls: Vec[][] = [
     v(48, -720),
     v(0, -790),
     v(0, -850),
+  ],
+  [
+    v(0, 0, 20),
+    v(0, -55, 20),
+    v(55, -125, 18),
+    v(70, -185, 16),
+    v(30, -240, 14),
+    v(-35, -240, 12),
+    v(-70, -185, 10),
+    v(-45, -125, 8),
+    v(10, -105, 6),
+    v(65, -145, 4),
+    v(60, -210, 2),
+    v(5, -250, 0),
+    v(-60, -225, -2),
+    v(-75, -155, -4),
+    v(-25, -105, -6),
+    v(55, -275, -4),
+    v(105, -350, 8),
+    v(30, -430, -8),
+    v(-55, -500, 10),
+    v(10, -585, 0),
+    v(10, -700, 0),
   ],
   [
     v(0, 0),
@@ -323,6 +357,7 @@ function make(theme: number): Course {
   }
   const materials: Surface[][] = [
     ['grass', 'wood', 'grass'],
+    ['sand', 'stone', 'sand'],
     ['cookie', 'candy', 'cookie'],
     ['metal', 'glass', 'metal'],
     ['stone', 'ice', 'stone'],
@@ -330,6 +365,7 @@ function make(theme: number): Course {
   ];
   const chapterSurfaces: Surface[][] = [
     ['grass', 'grass', 'wood', 'grass', 'wood', 'grass'],
+    ['sand', 'sand', 'stone', 'sand', 'stone', 'sand'],
     ['cookie', 'cookie', 'candy', 'cookie', 'candy', 'cookie'],
     ['metal', 'metal', 'glass', 'metal', 'glass', 'metal'],
     ['stone', 'stone', 'stone', 'ice', 'stone', 'stone'],
@@ -337,13 +373,14 @@ function make(theme: number): Course {
   ];
   const chapterWidths = [
     [7.5, 6, 5.5, 7, 8, 8],
+    [9, 9, 10, 8, 9, 10],
     [7, 2.8, 6, 5, 4, 7],
     [8, 9, 8, 7, 8, 9],
     [6, 5, 2.8, 7, 4.5, 7],
     [7, 6, 6, 2.8, 7, 9],
   ];
   const course: Course = {
-    id: 'course-' + (theme + 1),
+    id: 'course-' + (theme === 1 ? 6 : theme === 0 ? 1 : theme),
     theme,
     name,
     subtitle,
@@ -355,7 +392,7 @@ function make(theme: number): Course {
     pads: [],
     tarts: [],
     checkpoints: [],
-    start: { ...route[0], y: 0.6 },
+    start: { ...route[0], y: route[0].y + 0.6 },
     goal: route.at(-1)!,
     branches: [],
   };
@@ -370,7 +407,7 @@ function make(theme: number): Course {
         width,
         chapterSurfaces[theme][i],
         'chapter-' + i,
-        theme === 2 && i === 1,
+        (theme === 1 && i < 4) || (theme === 3 && i === 1),
       ),
     );
     if (i > 0) course.checkpoints.push({ ...route[from] });
@@ -383,14 +420,14 @@ function make(theme: number): Course {
       d: 9,
       safe: true,
       surface: materials[theme][0],
-      shape: theme === 1 ? 'disc' : 'hex',
+      shape: theme === 2 ? 'disc' : 'hex',
     }),
   );
   // A connected moving-footbridge detour leaves a checkpoint and rejoins before the next one.
   const anchor = course.checkpoints[1];
   const motion: Motion = {
-    kind: theme === 1 || theme === 4 ? 'rotate' : theme === 2 ? 'slide' : 'lift',
-    amplitude: theme === 1 || theme === 4 ? 0.35 : theme === 2 ? 2 : 1.2,
+    kind: theme === 1 || theme === 2 || theme === 5 ? 'rotate' : theme === 3 ? 'slide' : 'lift',
+    amplitude: theme === 1 || theme === 2 || theme === 5 ? 0.7 : theme === 3 ? 3 : 1.8,
     period: 6,
   };
   const anchorIndex = route.findIndex((p) => p.x === anchor.x && p.z === anchor.z),
@@ -456,7 +493,7 @@ function make(theme: number): Course {
   );
   course.branches.push([...approach, offset(12, 18), bridge, offset(22, 18), ...departure]);
   // Branch reconnects ahead. No collectibles are exclusive to either branch.
-  if (theme === 2 || theme === 4) {
+  if (theme === 1 || theme === 3 || theme === 5) {
     const a = Math.floor(route.length * 0.6),
       b = Math.floor(route.length * 0.68);
     const entry = route[a],
@@ -481,7 +518,7 @@ function make(theme: number): Course {
     course.platforms.push(...ribbon(branch, 3, materials[theme][1], 'shortcut'));
   }
   const boostIndices =
-    theme === 2
+    theme === 3
       ? [
           12,
           16,
@@ -496,7 +533,7 @@ function make(theme: number): Course {
           Math.floor(route.length * 0.8),
           Math.floor(route.length * 0.8) + 4,
           Math.floor(route.length * 0.8) + 8,
-          ...(theme === 4 ? [Math.floor(route.length * 0.8) + 12] : []),
+          ...(theme === 5 ? [Math.floor(route.length * 0.8) + 12] : []),
         ];
   for (const index of boostIndices) {
     const p = route[index],
@@ -510,6 +547,7 @@ function make(theme: number): Course {
       dz: (next.z - p.z) / length,
       w: 4.5,
       d: 2.5,
+      power: theme === 0 ? 15 : undefined,
     });
   }
   // A jump over a genuine gap, with a broad landing. Route is kept for guidance and physical route tests.
@@ -536,13 +574,74 @@ function make(theme: number): Course {
       d: 9,
       safe: true,
       surface: chapterSurfaces[theme][5],
-      shape: theme === 1 ? 'disc' : 'hex',
+      shape: theme === 2 ? 'disc' : 'hex',
     });
     gap.push(...route.slice(jumpIndex + 1, jumpIndex + 2));
   }
   course.platforms = course.platforms.filter(
     (p) => !p.vertices || !gap.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 2),
   );
+  // Each sky has a mechanical signature in addition to its route shape.
+  if (theme === 2) {
+    // Candy is a hopscotch course: round stepping stones and extra launch pads.
+    for (const p of course.platforms)
+      if (p.id.startsWith('chapter-2-') && !p.vertices) p.shape = 'disc';
+    for (const fraction of [0.34, 0.52]) {
+      const index = Math.floor(route.length * fraction),
+        p = route[index],
+        next = route[index + 1];
+      const length = Math.hypot(next.x - p.x, next.z - p.z);
+      course.pads.push({
+        ...p,
+        id: `candy-jump-${index}`,
+        type: 'jump',
+        dx: (next.x - p.x) / length,
+        dz: (next.z - p.z) / length,
+        w: 4.5,
+        d: 2.5,
+      });
+    }
+  }
+  if (theme === 3) {
+    // Neon lanes keep pushing forward, turning chained dash pads into a power run.
+    for (const p of course.platforms.filter((p) => p.id.startsWith('chapter-1-'))) {
+      const i = Number(p.id.split('-').at(-1)) || 0,
+        a = route[Math.min(route.length - 2, i)],
+        b = route[Math.min(route.length - 1, i + 1)];
+      const length = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+      p.effect = {
+        kind: 'conveyor',
+        x: (b.x - a.x) / length,
+        z: (b.z - a.z) / length,
+        strength: 5,
+      };
+    }
+  }
+  if (theme === 4) {
+    // Crystal connections rise and rotate, opening a changing upper route.
+    course.platforms
+      .filter((p) => p.id.startsWith('moving-') || p.id === 'moving-bridge')
+      .forEach((p, i) => {
+        p.motion = {
+          kind: i % 2 ? 'rotate' : 'lift',
+          amplitude: i % 2 ? 0.9 : 2.4,
+          period: 5 + (i % 3),
+        };
+      });
+  }
+  if (theme === 5) {
+    // Windmill islands combine turning decks with crosswinds.
+    course.platforms
+      .filter((p) => p.id.startsWith('chapter-3-'))
+      .forEach((p, i) => {
+        p.effect = { kind: 'wind', x: i % 2 ? -0.7 : 0.7, z: 0.3, strength: 3.2 };
+      });
+    course.platforms
+      .filter((p) => p.id.includes('moving') || p.id.includes('shortcut'))
+      .forEach((p) => {
+        if (!p.vertices) p.motion = { kind: 'rotate', amplitude: 0.8, period: 5.5 };
+      });
+  }
   route.forEach((p, i) => {
     if (
       i % 4 === 2 &&

@@ -183,8 +183,8 @@ describe('保存', () => {
   });
 });
 describe('コースデータ', () => {
-  it('全5コースにCPと一意IDがあり、全CPは安全', () => {
-    expect(courses).toHaveLength(5);
+  it('全6コースにCPと一意IDがあり、全CPは安全', () => {
+    expect(courses).toHaveLength(6);
     for (const c of courses) {
       expect(c.checkpoints.length).toBeGreaterThan(0);
       expect(new Set(c.tarts.map((t) => t.id)).size).toBe(c.tarts.length);

@@ -10,7 +10,7 @@ export class Round {
   finishedTime = 0;
   falls = 0;
   private nextId = 0;
-  private lastRecovery?: { id: number; time: number; failures: number };
+  private lastRecovery?: { id: number; time: number };
   constructor(public course: Course) {}
   start(now: number) {
     this.startedAt = now;
@@ -47,17 +47,16 @@ export class Round {
   }
   recover(now: number, valid: (v: Vec) => boolean): Vec {
     this.falls++;
-    const prior = this.lastRecovery;
-    const failures = prior && now - prior.time < tuning.repeatWindow ? prior.failures + 1 : 0;
-    const candidate =
-      failures >= tuning.repeatLimit
-        ? undefined
-        : [...this.history]
-            .reverse()
-            .find((h) => now - h.time >= tuning.historyAge && valid(h.position));
+    const prior = this.lastRecovery,
+      repeated = prior && now - prior.time < tuning.repeatWindow;
+    const candidates = [...this.history]
+      .reverse()
+      .filter((h) => now - h.time >= tuning.historyAge && valid(h.position));
+    const candidate = repeated
+      ? (candidates.find((h) => h.id < prior.id) ?? candidates[0])
+      : candidates[0];
     if (candidate) {
-      this.lastRecovery = { id: candidate.id, time: now, failures };
-      this.history = this.history.filter((h) => h.time < candidate.time);
+      this.lastRecovery = { id: candidate.id, time: now };
       return { ...candidate.position, y: candidate.position.y + 0.08 };
     }
     this.history = [];

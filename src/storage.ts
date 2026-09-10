@@ -12,7 +12,7 @@ export class Save {
       for (const [id, value] of Object.entries(data.version === 2 ? (data.records ?? {}) : {})) {
         const v = value as RecordValue;
         if (
-          /^course-[1-5]$/.test(id) &&
+          /^course-[1-6]$/.test(id) &&
           v &&
           Number.isFinite(v.time) &&
           v.time >= 0 &&

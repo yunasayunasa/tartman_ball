@@ -21,6 +21,8 @@ export class Physics {
   private recoveryAt = 0;
   private guardUntil = 0;
   private boostUntil = 0;
+  private boostLimit = 0;
+  private boostDirection = { x: 0, z: 0 };
   simulationTime = 0;
   private moving: { platform: Platform; body: RAPIER.RigidBody }[] = [];
   private floorY = 0;
@@ -96,6 +98,12 @@ export class Physics {
   get position(): Vec {
     return this.ball.translation();
   }
+  get dashActive() {
+    return this.simulationTime < this.boostUntil;
+  }
+  get dashRatio() {
+    return this.dashActive ? Math.min(1, (this.boostUntil - this.simulationTime) / 0.35) : 0;
+  }
   step(input: InputVector, now: number) {
     const r = this.round;
     if (r.phase === 'falling') {
@@ -136,10 +144,37 @@ export class Physics {
         ? 0
         : this.ball.mass() * tuning.acceleration * (this.grounded ? 1 : tuning.airControl);
     this.ball.addForce({ x: input.x * scale, y: 0, z: input.z * scale }, true);
+    if (this.dashActive && now >= this.guardUntil)
+      this.ball.addForce(
+        {
+          x:
+            this.boostDirection.x *
+            this.ball.mass() *
+            tuning.acceleration *
+            tuning.dashAcceleration,
+          y: 0,
+          z:
+            this.boostDirection.z *
+            this.ball.mass() *
+            tuning.acceleration *
+            tuning.dashAcceleration,
+        },
+        true,
+      );
+    if (support?.effect) {
+      const effect = support.effect;
+      this.ball.addForce(
+        {
+          x: effect.x * effect.strength * this.ball.mass(),
+          y: 0,
+          z: effect.z * effect.strength * this.ball.mass(),
+        },
+        true,
+      );
+    }
     const speed = Math.hypot(velocity.x, velocity.z),
-      maxSpeed = now < this.boostUntil ? tuning.dashSpeed : tuning.speed;
-    const limitedSpeed =
-      now < this.boostUntil ? maxSpeed : Math.max(maxSpeed, speed - 3 * tuning.step);
+      maxSpeed = this.dashActive ? this.boostLimit : tuning.speed;
+    const limitedSpeed = this.dashActive ? maxSpeed : Math.max(maxSpeed, speed - 3 * tuning.step);
     if (speed > limitedSpeed)
       this.ball.setLinvel(
         {
@@ -163,11 +198,11 @@ export class Physics {
         contact.add(pad.id);
         if (!this.touching.has(pad.id) && now >= this.guardUntil) {
           if (pad.type === 'dash') {
-            this.ball.setLinvel(
-              { x: pad.dx * tuning.dashSpeed, y: v.y, z: pad.dz * tuning.dashSpeed },
-              true,
-            );
-            this.boostUntil = now + 2;
+            const power = pad.power ?? tuning.powerDashSpeed;
+            this.ball.setLinvel({ x: pad.dx * power, y: v.y, z: pad.dz * power }, true);
+            this.boostLimit = power <= tuning.dashSpeed ? tuning.dashSpeed : tuning.powerDashLimit;
+            this.boostDirection = { x: pad.dx, z: pad.dz };
+            this.boostUntil = this.simulationTime + (pad.duration ?? 2);
           } else this.ball.setLinvel({ x: v.x, y: tuning.jumpSpeed, z: v.z }, true);
           this.event(pad.type);
         }
@@ -192,12 +227,7 @@ export class Physics {
       )
         this.event('checkpoint');
     });
-    if (
-      this.grounded &&
-      safeAt(pos, this.course) &&
-      now >= this.guardUntil &&
-      Math.hypot(v.x, v.z) < 9.2
-    ) {
+    if (this.grounded && safeAt(pos, this.course) && now >= this.guardUntil && support?.safe) {
       this.stable += tuning.step;
       if (this.stable >= tuning.stableTime) r.remember(pos, now);
     } else this.stable = 0;
@@ -226,6 +256,7 @@ export class Physics {
     this.touching.clear();
     this.stable = 0;
     this.boostUntil = 0;
+    this.boostLimit = 0;
     this.grounded = false;
     this.floorY = this.course.route.reduce((a, b) =>
       Math.hypot(a.x - p.x, a.z - p.z) < Math.hypot(b.x - p.x, b.z - p.z) ? a : b,
