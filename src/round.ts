@@ -5,12 +5,12 @@ export class Round {
   phase: Phase = 'ready';
   collected = new Set<string>();
   checkpoint = -1;
-  history: { position: Vec; time: number; id: number }[] = [];
+  history: { position: Vec; time: number; id: number; platformId?: string; local?: Vec }[] = [];
   startedAt = 0;
   finishedTime = 0;
   falls = 0;
   private nextId = 0;
-  private lastRecovery?: { id: number; time: number };
+  private lastRecovery?: { id: number; time: number; failures: number };
   constructor(public course: Course) {}
   start(now: number) {
     this.startedAt = now;
@@ -40,27 +40,46 @@ export class Round {
     this.lastRecovery = undefined;
     return true;
   }
-  remember(position: Vec, now: number) {
+  remember(position: Vec, now: number, platformId?: string, local?: Vec) {
     if (this.history.length && now - this.history.at(-1)!.time < tuning.historyInterval) return;
-    this.history.push({ position: { ...position }, time: now, id: this.nextId++ });
+    const last = this.history.at(-1);
+    if (platformId && last?.platformId === platformId) {
+      last.position = { ...position };
+      last.time = now;
+      last.local = local;
+      return;
+    }
+    this.history.push({
+      position: { ...position },
+      time: now,
+      id: this.nextId++,
+      platformId,
+      local,
+    });
     if (this.history.length > tuning.historyLimit) this.history.shift();
   }
-  recover(now: number, valid: (v: Vec) => boolean): Vec {
+  recover(now: number, valid: (v: Vec, platformId?: string, local?: Vec) => boolean | Vec): Vec {
     this.falls++;
     const prior = this.lastRecovery,
       repeated = prior && now - prior.time < tuning.repeatWindow;
+    const failures = repeated ? prior.failures + 1 : 0;
     const candidates = [...this.history]
       .reverse()
-      .filter((h) => now - h.time >= tuning.historyAge && valid(h.position));
-    const candidate = repeated
-      ? (candidates.find((h) => h.id < prior.id) ?? candidates[0])
-      : candidates[0];
+      .filter((h) => now - h.time >= tuning.historyAge && valid(h.position, h.platformId, h.local));
+    const candidate =
+      failures >= tuning.repeatLimit
+        ? undefined
+        : repeated
+          ? candidates.find((h) => h.id < prior.id)
+          : candidates[0];
     if (candidate) {
-      this.lastRecovery = { id: candidate.id, time: now };
-      return { ...candidate.position, y: candidate.position.y + 0.08 };
+      this.lastRecovery = { id: candidate.id, time: now, failures };
+      const transformed = valid(candidate.position, candidate.platformId, candidate.local);
+      const position = typeof transformed === 'object' ? transformed : candidate.position;
+      return { ...position, y: position.y + 0.08 };
     }
     this.history = [];
-    this.lastRecovery = undefined;
+    this.lastRecovery = { id: prior?.id ?? -1, time: now, failures };
     const cp = this.course.checkpoints[this.checkpoint];
     return cp ? { ...cp, y: cp.y + 0.6 } : { ...this.course.start };
   }

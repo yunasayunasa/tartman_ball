@@ -88,23 +88,27 @@ describe('移行・高低差・動く床', () => {
     expect(surfaceHeight({ x: 0, z: 5 }, ramp)).toBeCloseTo(2);
     expect(surfaceHeight({ x: 10, z: 5 }, ramp)).toBeUndefined();
   });
-  it.each(courses)('$name の動く床に乗れて、中断で周期も止まる', (course) => {
-    const game = new Physics(course, () => {}),
-      p = course.platforms.find((p) => p.motion)!;
-    game.round.start(0);
-    game.teleport({ x: p.x, y: p.y + 0.52, z: p.z });
-    for (let i = 0; i < 120; i++) game.step({ x: 0, z: 0 }, i / 120);
-    const pose = platformPose(p, game.simulationTime);
-    expect(game.position.y).toBeCloseTo(pose.position.y + 0.52, 1);
-    expect(safeAt(game.position, course)).toBe(false);
-    const time = game.simulationTime,
-      position = game.position;
-    game.round.phase = 'paused';
-    for (let i = 0; i < 120; i++) game.step({ x: 0, z: 0 }, 2 + i / 120);
-    expect(game.simulationTime).toBe(time);
-    expect(game.position).toEqual(position);
-    game.dispose();
-  });
+  it.each(courses.filter((c) => c.platforms.some((p) => p.motion)))(
+    '$name の動く床に乗れて、中断で周期も止まる',
+    (course) => {
+      const game = new Physics(course, () => {}),
+        p = course.platforms.find((p) => p.motion)!;
+      game.round.start(0);
+      const initial = platformPose(p, 0).position;
+      game.teleport({ ...initial, y: initial.y + 0.52 });
+      for (let i = 0; i < 120; i++) game.step({ x: 0, z: 0 }, i / 120);
+      const pose = platformPose(p, game.simulationTime);
+      expect(game.position.y).toBeCloseTo(pose.position.y + 0.52, 1);
+      expect(safeAt(game.position, course)).toBe(false);
+      const time = game.simulationTime,
+        position = game.position;
+      game.round.phase = 'paused';
+      for (let i = 0; i < 120; i++) game.step({ x: 0, z: 0 }, 2 + i / 120);
+      expect(game.simulationTime).toBe(time);
+      expect(game.position).toEqual(position);
+      game.dispose();
+    },
+  );
   it('全分岐は本道の2点に接続し、片道限定タルトを要求しない', () => {
     for (const c of courses)
       for (const branch of c.branches) {

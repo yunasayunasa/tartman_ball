@@ -30,6 +30,7 @@ let toastUntil = 0,
 let resultTimeBest = false,
   resultTartBest = false;
 let pageVersion = 0;
+let lastSection = '';
 function syncSettings() {
   input.mode = save.settings.mode;
   input.sensitivity = save.settings.sensitivity;
@@ -56,6 +57,8 @@ function page(content: string, className = '') {
   ui.innerHTML = `<section class="panel ${className}">${content}</section>`;
 }
 function replaceGame(index: number) {
+  sound.updateDash(false, 0);
+  lastSection = '';
   game?.dispose();
   selected = index;
   accumulator = 0;
@@ -155,6 +158,7 @@ function showPlay() {
 }
 function pause(message = '') {
   if (!['playing', 'falling'].includes(game?.round.phase)) return;
+  sound.updateDash(false, 0);
   beforePause = game.round.phase;
   game.round.phase = 'paused';
   accumulator = 0;
@@ -216,6 +220,7 @@ function result() {
 }
 function event(type: GameEvent) {
   sound.play(type);
+  if (type === 'dash') view.dash.fire(game.position, game.ball.linvel(), game.lastPadId);
   view.effect(type);
   const text: Partial<Record<GameEvent, string>> = {
     tart: 'タルト +1',
@@ -259,6 +264,21 @@ function frame(timestamp: number) {
     if (hudTarts)
       hudTarts.textContent = `${game.round.collected.size} / ${game.course.tarts.length}`;
     view.draw(game, dt, screenState === 'menu' || screenState === 'ready');
+    sound.updateDash(
+      game.dashActive && game.round.phase === 'playing',
+      Math.hypot(game.ball.linvel().x, game.ball.linvel().z),
+    );
+    if (game.round.phase === 'playing') {
+      const section = game.course.sections?.find(
+        (s) =>
+          Math.hypot(s.x - game.position.x, s.z - game.position.z) < 12 &&
+          Math.abs(s.y - game.position.y) < 3,
+      );
+      if (section && lastSection !== section.title) {
+        lastSection = section.title;
+        toast(section.hint, 3.5);
+      }
+    }
   }
   if (timestamp > toastUntil) toastElement.classList.remove('visible');
   requestAnimationFrame(frame);
@@ -304,6 +324,7 @@ async function boot() {
             memory: view.renderer.info.memory,
             calls: view.renderer.info.render.calls,
             simulationTime: game.simulationTime,
+            dash: { active: game.dashActive, fov: view.camera.fov, ...view.dash.diagnostics },
             camera: {
               x: view.camera.position.x,
               y: view.camera.position.y,

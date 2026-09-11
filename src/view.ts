@@ -14,6 +14,7 @@ import type { InputVector } from './input';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { roadMaterial } from './materials';
 import type { Physics, GameEvent } from './physics';
+import { DashEffects } from './dash-effects';
 
 export function inPlace(clip: T.AnimationClip, nodes: string[]) {
   const result = clip.clone();
@@ -37,6 +38,7 @@ export class View {
   private activeCourse?: Course;
   private movers: { group: T.Group; platform: Platform }[] = [];
   private rotors: T.Group[] = [];
+  private winds: { mesh: T.Mesh; origin: T.Vector3; direction: T.Vector3; phase: number }[] = [];
   private actor = new T.Group();
   private shell = new T.Group();
   private character = new T.Group();
@@ -55,10 +57,7 @@ export class View {
   private time = 0;
   private shadow: T.Mesh;
   private ballMaterial: T.MeshStandardMaterial;
-  private dashTrail: T.Mesh;
-  private speedLines = new T.Group();
-  private dashVisual = 0;
-  private dashShock = 0;
+  readonly dash: DashEffects;
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new T.WebGLRenderer({
       canvas,
@@ -99,34 +98,7 @@ export class View {
     const ball = new T.Mesh(new T.SphereGeometry(tuning.radius, 32, 24), this.ballMaterial);
     ball.renderOrder = 3;
     this.shell.add(ball);
-    this.dashTrail = new T.Mesh(
-      new T.ConeGeometry(0.38, 4.5, 12, 1, true),
-      new T.MeshBasicMaterial({
-        color: '#8ff8ff',
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: T.AdditiveBlending,
-      }),
-    );
-    this.dashTrail.rotation.x = -Math.PI / 2;
-    this.dashTrail.position.z = 2.5;
-    this.actor.add(this.dashTrail);
-    for (let i = 0; i < 14; i++) {
-      const line = new T.Mesh(
-        new T.PlaneGeometry(0.025, 0.9 + (i % 4) * 0.3),
-        new T.MeshBasicMaterial({
-          color: '#d9ffff',
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-        }),
-      );
-      line.position.set(((i % 7) - 3) * 0.24, (((i * 5) % 9) - 4) * 0.18, -1.2 - (i % 3) * 0.25);
-      this.speedLines.add(line);
-    }
-    this.speedLines.position.z = -1;
-    this.camera.add(this.speedLines);
+    this.dash = new DashEffects(this.scene, this.camera);
     this.scene.add(this.camera);
     const ringMat = new T.MeshBasicMaterial({ color: '#efffff', transparent: true, opacity: 0.65 });
     for (let i = 0; i < 2; i++) {
@@ -232,9 +204,11 @@ export class View {
     group.clear();
   }
   build(course: Course) {
+    this.dash.reset();
     this.activeCourse = course;
     this.movers = [];
     this.rotors = [];
+    this.winds = [];
     this.disposeGroup(this.level);
     this.tarts.clear();
     this.tartInstances = [];
@@ -354,16 +328,38 @@ export class View {
         mesh.position.y = -0.5;
         group.add(mesh);
         group.position.set(p.x, p.y, p.z);
+        group.rotation.y = p.angle ?? 0;
         this.level.add(group);
-        if (p.motion) this.movers.push({ group, platform: p });
+        if (p.motion) {
+          this.movers.push({ group, platform: p });
+          const trimMaterial = material(p.motion.kind === 'lift' ? '#70e8ff' : '#ffe7a2', {
+            emissive: '#58baca',
+            emissiveIntensity: 0.6,
+          });
+          for (const side of [-1, 1]) {
+            const trim = new T.Mesh(new T.BoxGeometry(0.12, 0.07, p.d), trimMaterial);
+            trim.position.set(side * (p.w / 2 - 0.12), 0.05, 0);
+            group.add(trim);
+          }
+          if (p.motion.kind === 'lift')
+            for (const side of [-1, 1]) {
+              const pole = new T.Mesh(
+                new T.CylinderGeometry(0.13, 0.2, p.motion.amplitude * 2 + 2, 6),
+                material('#768eaf'),
+              );
+              pole.position.set(p.x + side * (p.w / 2 + 0.5), p.y, p.z);
+              this.level.add(pole);
+            }
+        }
         continue;
       }
       const slab = new T.Mesh(new T.BoxGeometry(p.w, 0.65, p.d), side);
-      slab.position.set(p.x, -0.36, p.z);
+      slab.position.set(p.x, p.y - 0.5, p.z);
+      slab.scale.y = 1 / 0.65;
       slab.rotation.y = p.angle ?? 0;
       this.level.add(slab);
-      const top = new T.Mesh(new T.BoxGeometry(p.w - 0.12, 0.1, p.d - 0.12), floor);
-      top.position.set(p.x, -0.025, p.z);
+      const top = new T.Mesh(new T.BoxGeometry(p.w - 0.12, 0.08, p.d - 0.12), topMaterial);
+      top.position.set(p.x, p.y - 0.04, p.z);
       top.rotation.y = p.angle ?? 0;
       this.level.add(top);
       if (p.id.startsWith('island')) {
@@ -380,11 +376,16 @@ export class View {
     floor.dispose();
     cliff.dispose();
     this.decorate(course);
+    this.decorateMechanics(course);
     for (const pad of course.pads) {
+      if (pad.type === 'dash') {
+        this.dash.addPanel(pad, this.level);
+        continue;
+      }
       const mesh = new T.Mesh(
         new T.BoxGeometry(pad.w, 0.055, pad.d),
-        material(pad.type === 'dash' ? '#f6be50' : '#ec8ea4', {
-          emissive: pad.type === 'dash' ? '#d49013' : '#bc436e',
+        material('#ec8ea4', {
+          emissive: '#bc436e',
           emissiveIntensity: 0.18,
         }),
       );
@@ -666,8 +667,9 @@ export class View {
       add(new T.SphereGeometry(4, 16, 12), '#ed698e', { x: 25, y: 12, z: -290 });
     }
     if (theme === 5) add(new T.SphereGeometry(22, 20, 12), '#ffe1a5', { x: 0, y: 30, z: -1160 });
-    const moving = course.platforms.find((p) => p.motion)!;
+    const moving = course.platforms.find((p) => p.motion);
     const branch = course.branches[0];
+    if (!moving || !branch) return;
     const sign = this.label('動く橋 →', '#fff3d4', '#775d4c');
     sign.position.set(branch[0].x, branch[0].y + 2.6, branch[0].z);
     sign.scale.set(3, 0.75, 1);
@@ -685,18 +687,100 @@ export class View {
     dock.scale.set(4.5, 1.1, 1);
     this.level.add(dock);
   }
+  private decorateMechanics(course: Course) {
+    for (const section of course.sections ?? []) {
+      const nearest = course.route.reduce(
+        (best, p, i) =>
+          Math.hypot(p.x - section.x, p.z - section.z) <
+          Math.hypot(course.route[best].x - section.x, course.route[best].z - section.z)
+            ? i
+            : best,
+        0,
+      );
+      const next = course.route[Math.min(course.route.length - 1, nearest + 2)],
+        dx = next.x - section.x,
+        dz = next.z - section.z,
+        length = Math.hypot(dx, dz) || 1;
+      const title = this.label(section.title, '#173949', '#fff1c2');
+      title.position.set(
+        section.x - (dz / length) * 5,
+        section.y + 3.1,
+        section.z + (dx / length) * 5,
+      );
+      title.scale.set(5.8, 1.1, 1);
+      this.level.add(title);
+      const hint = this.label(section.hint, '#fff3d4', '#314b5c');
+      hint.position.copy(title.position).y -= 0.9;
+      hint.scale.set(5.8, 0.9, 1);
+      this.level.add(hint);
+    }
+    let effectIndex = 0;
+    for (const p of course.platforms) {
+      if (!p.effect || effectIndex++ % 7 !== 0) continue;
+      const effect = p.effect;
+      if (effect.kind === 'wind') {
+        for (let n = 0; n < 4; n++) {
+          const mesh = new T.Mesh(
+            new T.BoxGeometry(1.9, 0.045, 0.08),
+            new T.MeshBasicMaterial({
+              color: '#fff6ce',
+              transparent: true,
+              opacity: 0.5,
+              depthWrite: false,
+            }),
+          );
+          mesh.rotation.y = -Math.atan2(effect.z, effect.x);
+          this.level.add(mesh);
+          this.winds.push({
+            mesh,
+            origin: new T.Vector3(p.x, p.y + 0.8 + n * 0.3, p.z + n * 1.1),
+            direction: new T.Vector3(effect.x, 0, effect.z),
+            phase: n * 0.23,
+          });
+        }
+      } else {
+        const mark = this.label('>>>', '#185c78', '#98ffff');
+        mark.position.set(p.x, p.y + 0.22, p.z);
+        mark.scale.set(2, 0.55, 1);
+        this.level.add(mark);
+      }
+    }
+    if (course.theme === 3) {
+      for (let i = 8; i < course.route.length; i += 10) {
+        const p = course.route[i],
+          next = course.route[Math.min(course.route.length - 1, i + 1)],
+          angle = Math.atan2(next.x - p.x, next.z - p.z);
+        const gate = new T.Group();
+        gate.position.set(p.x, p.y, p.z);
+        gate.rotation.y = angle;
+        const mat = material(i % 20 ? '#57ecff' : '#ff85cd', {
+          emissive: i % 20 ? '#239fbf' : '#ac3289',
+          emissiveIntensity: 1.2,
+        });
+        for (const side of [-1, 1]) {
+          const pole = new T.Mesh(new T.BoxGeometry(0.22, 5, 0.28), mat);
+          pole.position.set(side * 6.8, 2.5, 0);
+          gate.add(pole);
+        }
+        const top = new T.Mesh(new T.BoxGeometry(13.8, 0.18, 0.28), mat);
+        top.position.y = 5;
+        gate.add(top);
+        this.level.add(gate);
+      }
+    }
+  }
   private label(text: string, background: string, color: string) {
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
+    canvas.width = 512;
     canvas.height = 64;
     const ctx = canvas.getContext('2d')!;
     ctx.fillStyle = background;
-    ctx.fillRect(0, 0, 256, 64);
+    ctx.fillRect(0, 0, 512, 64);
     ctx.fillStyle = color;
     ctx.font = 'bold 32px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 128, 34);
+    ctx.fillText(text, 256, 34, 492);
     const texture = new T.CanvasTexture(canvas);
     texture.colorSpace = T.SRGBColorSpace;
     const m = new T.SpriteMaterial({ map: texture });
@@ -718,8 +802,7 @@ export class View {
     this.actor.position.set(p.x, p.y, p.z);
   }
   effect(type: GameEvent) {
-    if (type === 'dash') this.dashShock = 1;
-    if (type === 'fall' || type === 'recover') return;
+    if (type === 'dash' || type === 'fall' || type === 'recover') return;
     const count = type === 'goal' ? 50 : 12;
     for (let i = 0; i < count; i++) {
       const mesh = new T.Mesh(this.particleGeometry, this.particleMaterial);
@@ -736,7 +819,7 @@ export class View {
     this.time += dt;
     const p = game.position,
       v = game.ball.linvel();
-    const target = new T.Vector3(p.x, Math.max(-0.5, p.y), p.z);
+    const target = new T.Vector3(p.x, p.y, p.z);
     if (game.round.phase !== 'falling') this.follow.lerp(target, 1 - Math.exp(-dt * 12));
     for (const { platform, group } of this.movers) {
       const pose = platformPose(platform, game.simulationTime);
@@ -744,6 +827,11 @@ export class View {
       group.rotation.y = pose.angle;
     }
     for (const rotor of this.rotors) rotor.rotation.z = -game.simulationTime * 0.45;
+    for (const wind of this.winds) {
+      const phase = (game.simulationTime * 0.7 + wind.phase) % 1;
+      wind.mesh.position.copy(wind.origin).addScaledVector(wind.direction, (phase - 0.5) * 12);
+      (wind.mesh.material as T.MeshBasicMaterial).opacity = Math.sin(phase * Math.PI) * 0.65;
+    }
     this.actor.position.set(p.x, p.y, p.z);
     const ground = game.course.platforms
       .map((s) => surfaceHeight(p, s, game.simulationTime))
@@ -755,20 +843,20 @@ export class View {
     const rotation = game.ball.rotation();
     this.shell.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
     const speed = Math.hypot(v.x, v.z);
-    const dashTarget = game.dashActive && game.round.phase === 'playing' ? 1 : 0;
-    this.dashVisual += (dashTarget - this.dashVisual) * (1 - Math.exp(-dt * (dashTarget ? 14 : 8)));
-    this.dashShock = Math.max(0, this.dashShock - dt / 0.15);
+    this.dash.update(
+      p,
+      v,
+      game.dashActive && game.round.phase === 'playing',
+      dt,
+      game.round.phase === 'playing' || menu,
+    );
+    const dashVisual = this.dash.intensity;
     this.ballMaterial.emissive.set('#48eaff');
-    this.ballMaterial.emissiveIntensity = this.dashVisual * 1.8;
-    (this.dashTrail.material as T.MeshBasicMaterial).opacity = this.dashVisual * 0.42;
-    this.dashTrail.visible = this.dashVisual > 0.01;
-    this.dashTrail.rotation.y = Math.atan2(v.x, v.z);
-    for (const child of this.speedLines.children)
-      (child as T.Mesh<T.BufferGeometry, T.MeshBasicMaterial>).material.opacity =
-        this.dashVisual * 0.6;
+    this.ballMaterial.emissiveIntensity = dashVisual * 2.4;
+    this.ballMaterial.opacity = 0.18 + dashVisual * 0.17;
     if (speed > 0.25) {
       const desired = new T.Quaternion().setFromEuler(
-        new T.Euler(-this.dashVisual * 0.32, Math.atan2(v.x, v.z), 0, 'YXZ'),
+        new T.Euler(dashVisual * 0.48, Math.atan2(v.x, v.z), 0, 'YXZ'),
       );
       this.character.quaternion.slerp(desired, 1 - Math.exp(-dt * 10));
     }
@@ -780,7 +868,7 @@ export class View {
         : 'airborne';
     if (this.run) {
       this.run.paused = !moving;
-      this.run.timeScale = speed / 3;
+      this.run.timeScale = Math.min(2.5, speed / 3);
       this.mixer?.update(dt);
     }
     if (this.placeholder)
@@ -810,14 +898,20 @@ export class View {
     );
     if (game.round.phase === 'playing') this.routeCamera.update(p, game.course, dt, speed);
     const yaw = this.routeCamera.yaw,
-      distance = menu ? 10 : 6 + Math.max(0, Math.min(1.5, (speed - 9) / 4));
+      distance = menu ? 10 : 6 - dashVisual * 0.6 + this.dash.shock * 0.7;
     this.camera.position
       .copy(this.follow)
-      .add(new T.Vector3(Math.sin(yaw) * distance, menu ? 6 : 3, Math.cos(yaw) * distance));
-    if (this.dashShock > 0)
+      .add(
+        new T.Vector3(
+          Math.sin(yaw) * distance,
+          menu ? 6 : 3 - dashVisual * 0.55,
+          Math.cos(yaw) * distance,
+        ),
+      );
+    if (this.dash.shock > 0)
       this.camera.position.add(
         new T.Vector3(Math.sin(this.time * 91), Math.cos(this.time * 77), 0).multiplyScalar(
-          this.dashShock * 0.12,
+          this.dash.shock * 0.065,
         ),
       );
     this.camera.lookAt(
@@ -833,7 +927,7 @@ export class View {
       if (particle.life <= 0) this.scene.remove(particle.mesh);
     }
     this.particles = this.particles.filter((p) => p.life > 0);
-    const targetFov = 55 + this.dashVisual * 10;
+    const targetFov = 55 + dashVisual * 12;
     this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-dt * 12));
     this.camera.updateProjectionMatrix();
     this.renderer.render(this.scene, this.camera);

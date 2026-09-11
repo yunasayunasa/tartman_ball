@@ -1,9 +1,16 @@
 import { CatmullRomCurve3, Vector3 } from 'three';
+import { buildStages } from './stages';
 export type Vec = { x: number; y: number; z: number };
 export type Point = { x: number; z: number; y?: number };
 export type Surface =
   'grass' | 'wood' | 'sand' | 'cookie' | 'candy' | 'metal' | 'glass' | 'stone' | 'ice' | 'copper';
-export type Motion = { kind: 'lift' | 'slide' | 'rotate'; amplitude: number; period: number };
+export type Motion = {
+  kind: 'lift' | 'slide' | 'rotate';
+  amplitude: number;
+  period: number;
+  stops?: boolean;
+  phase?: number;
+};
 export type Platform = {
   id: string;
   x: number;
@@ -12,6 +19,7 @@ export type Platform = {
   w: number;
   d: number;
   safe: boolean;
+  recoverySafe?: boolean;
   angle?: number;
   vertices?: Vec[];
   surface?: Surface;
@@ -31,6 +39,8 @@ export type Pad = {
   d: number;
   power?: number;
   duration?: number;
+  launchSpeed?: number;
+  jumpSpeed?: number;
 };
 export type Course = {
   id: string;
@@ -48,6 +58,7 @@ export type Course = {
   goal: Vec;
   route: Vec[];
   branches: Vec[][];
+  sections?: (Vec & { title: string; hint: string })[];
 };
 const v = (x: number, z: number, y = 0): Vec => ({ x, y, z });
 export const surfaceColors: Record<Surface, string> = {
@@ -64,7 +75,14 @@ export const surfaceColors: Record<Surface, string> = {
 };
 export function platformPose(p: Platform, time: number): { position: Vec; angle: number } {
   const m = p.motion,
-    wave = m ? Math.sin((time * Math.PI * 2) / m.period) * m.amplitude : 0;
+    wave = m
+      ? (m.stops
+          ? Math.max(
+              -1,
+              Math.min(1, -Math.cos((time * Math.PI * 2) / m.period + (m.phase ?? 0)) * 1.8),
+            )
+          : Math.sin((time * Math.PI * 2) / m.period + (m.phase ?? 0))) * m.amplitude
+      : 0;
   return {
     position: {
       x: p.x + (m?.kind === 'slide' ? wave : 0),
@@ -581,67 +599,6 @@ function make(theme: number): Course {
   course.platforms = course.platforms.filter(
     (p) => !p.vertices || !gap.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 2),
   );
-  // Each sky has a mechanical signature in addition to its route shape.
-  if (theme === 2) {
-    // Candy is a hopscotch course: round stepping stones and extra launch pads.
-    for (const p of course.platforms)
-      if (p.id.startsWith('chapter-2-') && !p.vertices) p.shape = 'disc';
-    for (const fraction of [0.34, 0.52]) {
-      const index = Math.floor(route.length * fraction),
-        p = route[index],
-        next = route[index + 1];
-      const length = Math.hypot(next.x - p.x, next.z - p.z);
-      course.pads.push({
-        ...p,
-        id: `candy-jump-${index}`,
-        type: 'jump',
-        dx: (next.x - p.x) / length,
-        dz: (next.z - p.z) / length,
-        w: 4.5,
-        d: 2.5,
-      });
-    }
-  }
-  if (theme === 3) {
-    // Neon lanes keep pushing forward, turning chained dash pads into a power run.
-    for (const p of course.platforms.filter((p) => p.id.startsWith('chapter-1-'))) {
-      const i = Number(p.id.split('-').at(-1)) || 0,
-        a = route[Math.min(route.length - 2, i)],
-        b = route[Math.min(route.length - 1, i + 1)];
-      const length = Math.hypot(b.x - a.x, b.z - a.z) || 1;
-      p.effect = {
-        kind: 'conveyor',
-        x: (b.x - a.x) / length,
-        z: (b.z - a.z) / length,
-        strength: 5,
-      };
-    }
-  }
-  if (theme === 4) {
-    // Crystal connections rise and rotate, opening a changing upper route.
-    course.platforms
-      .filter((p) => p.id.startsWith('moving-') || p.id === 'moving-bridge')
-      .forEach((p, i) => {
-        p.motion = {
-          kind: i % 2 ? 'rotate' : 'lift',
-          amplitude: i % 2 ? 0.9 : 2.4,
-          period: 5 + (i % 3),
-        };
-      });
-  }
-  if (theme === 5) {
-    // Windmill islands combine turning decks with crosswinds.
-    course.platforms
-      .filter((p) => p.id.startsWith('chapter-3-'))
-      .forEach((p, i) => {
-        p.effect = { kind: 'wind', x: i % 2 ? -0.7 : 0.7, z: 0.3, strength: 3.2 };
-      });
-    course.platforms
-      .filter((p) => p.id.includes('moving') || p.id.includes('shortcut'))
-      .forEach((p) => {
-        if (!p.vertices) p.motion = { kind: 'rotate', amplitude: 0.8, period: 5.5 };
-      });
-  }
   route.forEach((p, i) => {
     if (
       i % 4 === 2 &&
@@ -652,4 +609,4 @@ function make(theme: number): Course {
   });
   return course;
 }
-export const courses = descriptions.map((_, i) => make(i));
+export const courses = [make(0), ...buildStages()];

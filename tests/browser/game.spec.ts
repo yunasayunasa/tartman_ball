@@ -11,6 +11,14 @@ type Snapshot = {
   memory: { geometries: number; textures: number };
   calls: number;
   simulationTime: number;
+  dash: {
+    active: boolean;
+    fov: number;
+    intensity: number;
+    trailVertices: number;
+    streakPhase: number;
+    panelCount: number;
+  };
   camera: { x: number; y: number; z: number };
   framing: { height: number; x: number; y: number };
 };
@@ -19,12 +27,7 @@ declare global {
     __test: {
       snapshot(): Snapshot;
       teleport(p: { x: number; y: number; z: number }): void;
-      course(): {
-        tarts: { id: string; x: number; y: number; z: number }[];
-        goal: { x: number; y: number; z: number };
-        checkpoints: { x: number; y: number; z: number }[];
-        route: { x: number; y: number; z: number }[];
-      };
+      course(): import('../../src/courses').Course;
       invalidateHistory(): void;
       pause(): void;
     };
@@ -216,7 +219,7 @@ test('繰り返しコース選択しても描画資源が増え続けない', as
   await expect(page.locator('.course')).toHaveCount(6);
   const before = (await snapshot(page)).memory;
   for (let i = 0; i < 8; i++) {
-    await page.locator(`#course-${i % 5}`).click();
+    await page.locator(`#course-${i % 6}`).click();
     await page.locator('#back').click();
   }
   await expect

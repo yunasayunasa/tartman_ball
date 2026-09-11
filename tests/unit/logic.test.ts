@@ -71,13 +71,13 @@ describe('ラウンドと復帰', () => {
     r.start(0);
     expect(r.finish(3)).toBe(true);
   });
-  it('最新の端ではなく一定時間前の安全地点に戻す', () => {
+  it('端の候補を避けて直前の安全地点へ戻り、履歴を保持する', () => {
     const r = new Round(courses[0]);
     r.start(0);
     r.remember({ x: 0, y: 0.52, z: -5 }, 2);
     r.remember({ x: 3.4, y: 0.52, z: -9 }, 4);
     expect(r.recover(4.4, (p) => safeAt(p, courses[0]))).toEqual({ x: 0, y: 0.6, z: -5 });
-    expect(r.history).toHaveLength(0);
+    expect(r.history).toHaveLength(2);
   });
   it('CP通過後は履歴なしでもスタートに戻らない', () => {
     const r = new Round(courses[0]);
@@ -109,7 +109,7 @@ describe('ラウンドと復帰', () => {
   });
   it('CP更新で古い履歴を消し、履歴容量を制限する', () => {
     const r = new Round(courses[0]);
-    for (let i = 0; i < 100; i++) r.remember({ x: 0, y: 0.52, z: -5 }, i);
+    for (let i = 0; i < tuning.historyLimit + 10; i++) r.remember({ x: 0, y: 0.52, z: -5 }, i);
     expect(r.history).toHaveLength(tuning.historyLimit);
     r.reachCheckpoint(0);
     expect(r.history).toHaveLength(0);

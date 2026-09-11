@@ -23,6 +23,7 @@ export class Physics {
   private boostUntil = 0;
   private boostLimit = 0;
   private boostDirection = { x: 0, z: 0 };
+  lastPadId = '';
   simulationTime = 0;
   private moving: { platform: Platform; body: RAPIER.RigidBody }[] = [];
   private floorY = 0;
@@ -104,11 +105,51 @@ export class Physics {
   get dashRatio() {
     return this.dashActive ? Math.min(1, (this.boostUntil - this.simulationTime) / 0.35) : 0;
   }
+  private recoveryPoint(position: Vec, platformId?: string, local?: Vec): boolean | Vec {
+    if (!platformId) return safeAt(position, this.course);
+    const platform = this.course.platforms.find((p) => p.id === platformId);
+    if (!platform || !platform.recoverySafe) return false;
+    const pose = platformPose(platform, this.simulationTime);
+    const p = local
+      ? {
+          x: pose.position.x + local.x * Math.cos(pose.angle) + local.z * Math.sin(pose.angle),
+          y: pose.position.y + local.y,
+          z: pose.position.z - local.x * Math.sin(pose.angle) + local.z * Math.cos(pose.angle),
+        }
+      : position;
+    const inside = [
+      [0, 0],
+      [0.7, 0],
+      [-0.7, 0],
+      [0, 0.7],
+      [0, -0.7],
+    ].every(([x, z]) => {
+      const height = surfaceHeight({ x: p.x + x, z: p.z + z }, platform, this.simulationTime);
+      return height !== undefined && Math.abs(height + tuning.radius - p.y) < 0.2;
+    });
+    return inside ? p : false;
+  }
+  private rememberOn(position: Vec, now: number, support: Platform) {
+    if (!support.recoverySafe) {
+      if (safeAt(position, this.course)) this.round.remember(position, now);
+      return;
+    }
+    const pose = platformPose(support, this.simulationTime),
+      dx = position.x - pose.position.x,
+      dz = position.z - pose.position.z;
+    const local = {
+      x: dx * Math.cos(pose.angle) - dz * Math.sin(pose.angle),
+      y: position.y - pose.position.y,
+      z: dx * Math.sin(pose.angle) + dz * Math.cos(pose.angle),
+    };
+    if (this.recoveryPoint(position, support.id, local))
+      this.round.remember(position, now, support.id, local);
+  }
   step(input: InputVector, now: number) {
     const r = this.round;
     if (r.phase === 'falling') {
       if (now >= this.recoveryAt) {
-        this.teleport(r.recover(now, (p) => safeAt(p, this.course)));
+        this.teleport(r.recover(now, (p, id, local) => this.recoveryPoint(p, id, local)));
         this.guardUntil = now + tuning.recoveryGuard;
         r.phase = 'playing';
         this.event('recover');
@@ -144,7 +185,25 @@ export class Physics {
         ? 0
         : this.ball.mass() * tuning.acceleration * (this.grounded ? 1 : tuning.airControl);
     this.ball.addForce({ x: input.x * scale, y: 0, z: input.z * scale }, true);
-    if (this.dashActive && now >= this.guardUntil)
+    if (this.dashActive && now >= this.guardUntil) {
+      // Rotate momentum with steering. Keep speed through a turn rather than fighting a fixed force.
+      const inputLength = Math.hypot(input.x, input.z);
+      const speed = Math.hypot(velocity.x, velocity.z);
+      let angle =
+        speed > 1
+          ? Math.atan2(velocity.x, velocity.z)
+          : Math.atan2(this.boostDirection.x, this.boostDirection.z);
+      if (inputLength > 0.12) {
+        const target = Math.atan2(input.x, input.z);
+        const delta = Math.atan2(Math.sin(target - angle), Math.cos(target - angle));
+        const turn = (this.grounded ? 2.4 : 1.1) * tuning.step * inputLength;
+        angle += Math.max(-turn, Math.min(turn, delta));
+      }
+      this.boostDirection = { x: Math.sin(angle), z: Math.cos(angle) };
+      this.ball.setLinvel(
+        { x: this.boostDirection.x * speed, y: velocity.y, z: this.boostDirection.z * speed },
+        true,
+      );
       this.ball.addForce(
         {
           x:
@@ -161,6 +220,7 @@ export class Physics {
         },
         true,
       );
+    }
     if (support?.effect) {
       const effect = support.effect;
       this.ball.addForce(
@@ -172,19 +232,30 @@ export class Physics {
         true,
       );
     }
-    const speed = Math.hypot(velocity.x, velocity.z),
+    const currentVelocity = this.ball.linvel();
+    const speed = Math.hypot(currentVelocity.x, currentVelocity.z),
       maxSpeed = this.dashActive ? this.boostLimit : tuning.speed;
     const limitedSpeed = this.dashActive ? maxSpeed : Math.max(maxSpeed, speed - 3 * tuning.step);
     if (speed > limitedSpeed)
       this.ball.setLinvel(
         {
-          x: (velocity.x / speed) * limitedSpeed,
-          y: velocity.y,
-          z: (velocity.z / speed) * limitedSpeed,
+          x: (currentVelocity.x / speed) * limitedSpeed,
+          y: currentVelocity.y,
+          z: (currentVelocity.z / speed) * limitedSpeed,
         },
         true,
       );
     this.world.step();
+    // Forces apply during world.step; cap afterward as well to honor the advertised limit.
+    if (this.dashActive) {
+      const v = this.ball.linvel(),
+        speed = Math.hypot(v.x, v.z);
+      if (speed > this.boostLimit)
+        this.ball.setLinvel(
+          { x: (v.x * this.boostLimit) / speed, y: v.y, z: (v.z * this.boostLimit) / speed },
+          true,
+        );
+    }
     const pos = this.position,
       v = this.ball.linvel();
     const contact = new Set<string>();
@@ -197,13 +268,31 @@ export class Physics {
       if (over && pos.y >= (pad.y ?? 0) + 0.3 && pos.y < (pad.y ?? 0) + 0.95 && this.grounded) {
         contact.add(pad.id);
         if (!this.touching.has(pad.id) && now >= this.guardUntil) {
+          this.lastPadId = pad.id;
           if (pad.type === 'dash') {
             const power = pad.power ?? tuning.powerDashSpeed;
             this.ball.setLinvel({ x: pad.dx * power, y: v.y, z: pad.dz * power }, true);
             this.boostLimit = power <= tuning.dashSpeed ? tuning.dashSpeed : tuning.powerDashLimit;
             this.boostDirection = { x: pad.dx, z: pad.dz };
             this.boostUntil = this.simulationTime + (pad.duration ?? 2);
-          } else this.ball.setLinvel({ x: v.x, y: tuning.jumpSpeed, z: v.z }, true);
+          } else {
+            if (pad.launchSpeed && support?.recoverySafe) {
+              const behind = {
+                x: pad.x - pad.dx * 3.5,
+                y: (pad.y ?? 0) + tuning.radius,
+                z: pad.z - pad.dz * 3.5,
+              };
+              this.rememberOn(behind, now, support);
+            }
+            this.ball.setLinvel(
+              {
+                x: pad.launchSpeed ? pad.dx * pad.launchSpeed : v.x,
+                y: pad.jumpSpeed ?? tuning.jumpSpeed,
+                z: pad.launchSpeed ? pad.dz * pad.launchSpeed : v.z,
+              },
+              true,
+            );
+          }
           this.event(pad.type);
         }
       }
@@ -227,9 +316,15 @@ export class Physics {
       )
         this.event('checkpoint');
     });
-    if (this.grounded && safeAt(pos, this.course) && now >= this.guardUntil && support?.safe) {
+    if (
+      this.grounded &&
+      now >= this.guardUntil &&
+      support &&
+      (support.safe || support.recoverySafe) &&
+      !this.course.pads.some((p) => Math.hypot(p.x - pos.x, p.z - pos.z) < 3)
+    ) {
       this.stable += tuning.step;
-      if (this.stable >= tuning.stableTime) r.remember(pos, now);
+      if (this.stable >= tuning.stableTime) this.rememberOn(pos, now, support);
     } else this.stable = 0;
     if (
       Math.hypot(pos.x - this.course.goal.x, pos.z - this.course.goal.z) < 2.2 &&

@@ -20,7 +20,7 @@ jobs:
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm run build
-      - run: npx playwright test tests/browser/production.spec.ts
+      - run: npx playwright test tests/browser/production.spec.ts tests/browser/mechanics.spec.ts
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
