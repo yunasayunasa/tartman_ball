@@ -9,6 +9,7 @@ export const bgmTracks = [
   { id: 'battle', label: 'Battle', file: 'battle.mp3' },
   { id: 'enzan', label: 'Enzan', file: 'enzan.mp3' },
 ] as const;
+const bgmOutputScale = 0.5;
 
 export class Sounds {
   muted = false;
@@ -17,6 +18,7 @@ export class Sounds {
   private wind?: GainNode;
   private windFilter?: BiquadFilterNode;
   private bgm?: HTMLAudioElement;
+  private previewTimer?: number;
   unlock() {
     try {
       this.context ??= new AudioContext();
@@ -44,7 +46,7 @@ export class Sounds {
   configure(muted: boolean, bgmVolume: number) {
     this.muted = muted;
     this.bgmVolume = bgmVolume;
-    if (this.bgm) this.bgm.volume = muted ? 0 : bgmVolume;
+    if (this.bgm) this.bgm.volume = muted ? 0 : bgmVolume * bgmOutputScale;
   }
   startBgm(choice: BgmChoice) {
     const track =
@@ -55,21 +57,37 @@ export class Sounds {
     this.bgm = new Audio(`${import.meta.env.BASE_URL}bgm/${track.file}`);
     this.bgm.loop = true;
     this.bgm.preload = 'auto';
-    this.bgm.volume = this.muted ? 0 : this.bgmVolume;
+    this.bgm.volume = this.muted ? 0 : this.bgmVolume * bgmOutputScale;
     void this.bgm.play().catch(() => {});
   }
   pauseBgm() {
+    if (this.previewTimer) window.clearTimeout(this.previewTimer);
+    this.previewTimer = undefined;
     this.bgm?.pause();
   }
   resumeBgm() {
+    if (this.previewTimer) window.clearTimeout(this.previewTimer);
+    this.previewTimer = undefined;
     if (this.bgm) void this.bgm.play().catch(() => {});
+  }
+  previewBgm() {
+    this.resumeBgm();
+    this.previewTimer = window.setTimeout(() => {
+      this.bgm?.pause();
+      this.previewTimer = undefined;
+    }, 900);
   }
   stopBgm() {
     if (!this.bgm) return;
+    if (this.previewTimer) window.clearTimeout(this.previewTimer);
+    this.previewTimer = undefined;
     this.bgm.pause();
     this.bgm.removeAttribute('src');
     this.bgm.load();
     this.bgm = undefined;
+  }
+  get bgmOutputVolume() {
+    return this.bgm?.volume ?? 0;
   }
   play(type: GameEvent) {
     const ctx = this.context;

@@ -312,6 +312,11 @@ p {
   color: #526f75;
   padding: 8px;
 }
+.audio-preview {
+  display: block;
+  margin: -12px 0 6px auto;
+  padding: 6px 0;
+}
 .hud {
   position: absolute;
   top: max(18px, env(safe-area-inset-top));

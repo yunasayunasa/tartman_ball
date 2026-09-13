@@ -11,6 +11,7 @@ type Snapshot = {
   memory: { geometries: number; textures: number };
   calls: number;
   simulationTime: number;
+  bgmVolume: number;
   dash: {
     active: boolean;
     fov: number;
@@ -257,9 +258,11 @@ test('背景へ移った通知で物理を止め、復帰通知だけでは再�
 test('音声と感度の設定を保存し、再挑戦後も保持する', async ({ page }) => {
   await begin(page);
   await page.locator('#pause').click();
-  await page.locator('#muted').check();
   await page.locator('#bgm').selectOption('battle');
   await page.locator('#bgm-volume').fill('0.35');
+  await expect.poll(async () => (await snapshot(page)).bgmVolume).toBeCloseTo(0.175);
+  await page.locator('#muted').check();
+  await expect.poll(async () => (await snapshot(page)).bgmVolume).toBe(0);
   await page.locator('#sensitivity').fill('1.4');
   await page.locator('#restart').click();
   await page.locator('#start').click();

@@ -17,6 +17,14 @@ test('本番ビルドをリポジトリ配下から配信し、外部依存な�
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('http://127.0.0.1:5178/sky-tart-roll/?test');
   await expect(page.locator('.course')).toHaveCount(6);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    'content',
+    'Sky Tart Roll｜空を駆ける3Dアクションゲーム',
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    'content',
+    'https://yunasayunasa.github.io/tartman_ball/ogp.jpg',
+  );
   await expect(page.locator('#world')).toHaveAttribute('data-character', 'NlaTrack');
   expect(await page.evaluate(() => '__test' in window)).toBe(false);
   for (let i = 0; i < 6; i++) {
@@ -39,6 +47,9 @@ test('本番ビルドをリポジトリ配下から配信し、外部依存な�
   expect(
     (await page.request.get('http://127.0.0.1:5178/sky-tart-roll/licenses/NOTICE.txt')).status(),
   ).toBe(200);
+  expect((await page.request.get('http://127.0.0.1:5178/sky-tart-roll/ogp.jpg')).status()).toBe(
+    200,
+  );
   expect(failures).toEqual([]);
   expect(external).toEqual([]);
   expect(errors).toEqual([]);

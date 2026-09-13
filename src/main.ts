@@ -181,6 +181,7 @@ function pausePage(message = '') {
     <label class="setting">傾き感度 <input id="sensitivity" type="range" min="0.5" max="1.8" step="0.1" value="${input.sensitivity}" aria-label="傾き感度"></label>
     <label class="setting">BGM <select id="bgm" aria-label="BGM選択">${bgmOptions}</select></label>
     <label class="setting">BGM音量 <input id="bgm-volume" type="range" min="0" max="1" step="0.05" value="${save.settings.bgmVolume}" aria-label="BGM音量"></label>
+    <button class="text-button audio-preview" id="preview-bgm">この音量でBGMを試聴</button>
     <label class="setting">すべての音をミュート <input id="muted" type="checkbox" ${sound.muted ? 'checked' : ''}></label>
     <div id="input-error" role="alert"></div><div class="actions"><button class="button primary" id="resume">${input.mode === 'tilt' ? '基準を登録して再開' : '再開する'}</button>${input.mode === 'tilt' ? '<button class="button" id="calibrate">今の持ち方で基準リセット</button>' : ''}<button class="button" id="restart">最初から再挑戦</button><button class="text-button" id="back">エリア選択へ戻る</button></div>`);
   bindModes(() => pausePage());
@@ -206,6 +207,7 @@ function pausePage(message = '') {
     sound.pauseBgm();
     persist();
   });
+  bind('preview-bgm', () => sound.previewBgm());
   bind('calibrate', () => {
     void prepareInput('calibrate').then((ok) => {
       if (ok) toast('今の持ち方を基準にしました。');
@@ -350,6 +352,7 @@ async function boot() {
             memory: view.renderer.info.memory,
             calls: view.renderer.info.render.calls,
             simulationTime: game.simulationTime,
+            bgmVolume: sound.bgmOutputVolume,
             dash: { active: game.dashActive, fov: view.camera.fov, ...view.dash.diagnostics },
             camera: {
               x: view.camera.position.x,
