@@ -1,8 +1,21 @@
 import type { RecordValue } from './round';
-export type Settings = { mode: 'tilt' | 'stick'; sensitivity: number; muted: boolean };
+export type BgmChoice = 'random' | 'prepare' | 'main-theme' | 'cafe' | 'ronpa' | 'battle' | 'enzan';
+export type Settings = {
+  mode: 'tilt' | 'stick';
+  sensitivity: number;
+  muted: boolean;
+  bgm: BgmChoice;
+  bgmVolume: number;
+};
 export class Save {
   records: Record<string, RecordValue> = {};
-  settings: Settings = { mode: 'tilt', sensitivity: 1, muted: false };
+  settings: Settings = {
+    mode: 'tilt',
+    sensitivity: 1,
+    muted: false,
+    bgm: 'random',
+    bgmVolume: 0.55,
+  };
   available = true;
   constructor(private storage: Pick<Storage, 'getItem' | 'setItem'>) {
     try {
@@ -25,6 +38,14 @@ export class Save {
       if (Number.isFinite(data.settings?.sensitivity))
         this.settings.sensitivity = Math.min(1.8, Math.max(0.5, data.settings.sensitivity));
       if (typeof data.settings?.muted === 'boolean') this.settings.muted = data.settings.muted;
+      if (
+        ['random', 'prepare', 'main-theme', 'cafe', 'ronpa', 'battle', 'enzan'].includes(
+          data.settings?.bgm,
+        )
+      )
+        this.settings.bgm = data.settings.bgm;
+      if (Number.isFinite(data.settings?.bgmVolume))
+        this.settings.bgmVolume = Math.min(1, Math.max(0, data.settings.bgmVolume));
     } catch {
       this.available = false;
     }

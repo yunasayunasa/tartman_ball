@@ -4,7 +4,7 @@ import { Input } from './input';
 import { initPhysics, Physics, type GameEvent } from './physics';
 import { formatTime, improve, type Phase } from './round';
 import { Save } from './storage';
-import { Sounds } from './audio';
+import { bgmTracks, Sounds } from './audio';
 import { View } from './view';
 import { tuning, characterConfig } from './config';
 
@@ -34,7 +34,7 @@ let lastSection = '';
 function syncSettings() {
   input.mode = save.settings.mode;
   input.sensitivity = save.settings.sensitivity;
-  sound.muted = save.settings.muted;
+  sound.configure(save.settings.muted, save.settings.bgmVolume);
 }
 syncSettings();
 function persist() {
@@ -58,6 +58,7 @@ function page(content: string, className = '') {
 }
 function replaceGame(index: number) {
   sound.updateDash(false, 0);
+  sound.stopBgm();
   lastSection = '';
   game?.dispose();
   selected = index;
@@ -141,7 +142,12 @@ async function prepareInput(buttonId: string) {
 }
 async function start() {
   const currentGame = game;
-  if (!(await prepareInput('start')) || screenState !== 'ready' || currentGame !== game) return;
+  sound.unlock();
+  sound.startBgm(save.settings.bgm);
+  if (!(await prepareInput('start')) || screenState !== 'ready' || currentGame !== game) {
+    sound.stopBgm();
+    return;
+  }
   game.round.start(now());
   showPlay();
   toast('タルトの道をたどって、ゴールへ。');
@@ -159,6 +165,7 @@ function showPlay() {
 function pause(message = '') {
   if (!['playing', 'falling'].includes(game?.round.phase)) return;
   sound.updateDash(false, 0);
+  sound.pauseBgm();
   beforePause = game.round.phase;
   game.round.phase = 'paused';
   accumulator = 0;
@@ -166,11 +173,18 @@ function pause(message = '') {
   pausePage(message);
 }
 function pausePage(message = '') {
+  const bgmOptions = [
+    '<option value="random">ステージ開始ごとにランダム</option>',
+    ...bgmTracks.map(({ id, label }) => `<option value="${id}">${label}</option>`),
+  ].join('');
   page(`<span class="eyebrow">TAKE A BREATH</span><h2>ひと休み、雲の上。</h2><p>中断中もタイムは進みます。${message ? '<br>' + message : ''}</p>${modePicker()}
     <label class="setting">傾き感度 <input id="sensitivity" type="range" min="0.5" max="1.8" step="0.1" value="${input.sensitivity}" aria-label="傾き感度"></label>
-    <label class="setting">効果音をミュート <input id="muted" type="checkbox" ${sound.muted ? 'checked' : ''}></label>
+    <label class="setting">BGM <select id="bgm" aria-label="BGM選択">${bgmOptions}</select></label>
+    <label class="setting">BGM音量 <input id="bgm-volume" type="range" min="0" max="1" step="0.05" value="${save.settings.bgmVolume}" aria-label="BGM音量"></label>
+    <label class="setting">すべての音をミュート <input id="muted" type="checkbox" ${sound.muted ? 'checked' : ''}></label>
     <div id="input-error" role="alert"></div><div class="actions"><button class="button primary" id="resume">${input.mode === 'tilt' ? '基準を登録して再開' : '再開する'}</button>${input.mode === 'tilt' ? '<button class="button" id="calibrate">今の持ち方で基準リセット</button>' : ''}<button class="button" id="restart">最初から再挑戦</button><button class="text-button" id="back">エリア選択へ戻る</button></div>`);
   bindModes(() => pausePage());
+  (document.getElementById('bgm') as HTMLSelectElement).value = save.settings.bgm;
   document.getElementById('sensitivity')!.addEventListener('input', (e) => {
     save.settings.sensitivity = Number((e.target as HTMLInputElement).value);
     syncSettings();
@@ -179,6 +193,17 @@ function pausePage(message = '') {
   document.getElementById('muted')!.addEventListener('change', (e) => {
     save.settings.muted = (e.target as HTMLInputElement).checked;
     syncSettings();
+    persist();
+  });
+  document.getElementById('bgm-volume')!.addEventListener('input', (e) => {
+    save.settings.bgmVolume = Number((e.target as HTMLInputElement).value);
+    syncSettings();
+    persist();
+  });
+  document.getElementById('bgm')!.addEventListener('change', (e) => {
+    save.settings.bgm = (e.target as HTMLSelectElement).value as typeof save.settings.bgm;
+    sound.startBgm(save.settings.bgm);
+    sound.pauseBgm();
     persist();
   });
   bind('calibrate', () => {
@@ -191,6 +216,7 @@ function pausePage(message = '') {
     void prepareInput('resume').then((ok) => {
       if (ok && screenState === 'pause' && currentGame === game) {
         game.round.phase = beforePause;
+        sound.resumeBgm();
         showPlay();
       }
     });

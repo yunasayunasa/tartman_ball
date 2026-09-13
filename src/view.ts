@@ -594,7 +594,7 @@ export class View {
         rock.rotation.y = i * 0.17;
         if (i % 32 === 0)
           add(new T.TorusGeometry(7, 1.2, 6, 18, Math.PI), '#9b5d38', {
-            x: p.x,
+            x,
             y: p.y + 1,
             z: p.z,
           }).rotation.y = i * 0.04;
@@ -603,7 +603,7 @@ export class View {
         add(new T.CylinderGeometry(3.8, 3.8, 0.6, 24), '#fff0cd', { x, y: p.y + 0.3, z: p.z });
         add(new T.SphereGeometry(1.2, 12, 8), '#f57497', { x, y: p.y + 1.5, z: p.z });
         const candy = add(new T.TorusGeometry(3, 0.65, 8, 24), i % 32 ? '#c6f496' : '#ff97c7', {
-          x,
+          x: x + side * 4,
           y: p.y + 7,
           z: p.z,
         });
@@ -628,7 +628,7 @@ export class View {
         }
         if (i < course.route.length * 0.55) {
           const arch = add(new T.TorusGeometry(12, 2, 6, 16, Math.PI), '#6a6081', {
-            x: p.x,
+            x: x + side * 6,
             y: p.y,
             z: p.z,
           });
@@ -751,7 +751,12 @@ export class View {
           next = course.route[Math.min(course.route.length - 1, i + 1)],
           angle = Math.atan2(next.x - p.x, next.z - p.z);
         const gate = new T.Group();
-        gate.position.set(p.x, p.y, p.z);
+        const side = i % 20 ? 1 : -1;
+        gate.position.set(
+          p.x - Math.cos(angle) * side * 10,
+          p.y,
+          p.z + Math.sin(angle) * side * 10,
+        );
         gate.rotation.y = angle;
         const mat = material(i % 20 ? '#57ecff' : '#ff85cd', {
           emissive: i % 20 ? '#239fbf' : '#ac3289',
@@ -759,10 +764,10 @@ export class View {
         });
         for (const side of [-1, 1]) {
           const pole = new T.Mesh(new T.BoxGeometry(0.22, 5, 0.28), mat);
-          pole.position.set(side * 6.8, 2.5, 0);
+          pole.position.set(side * 2.8, 2.5, 0);
           gate.add(pole);
         }
-        const top = new T.Mesh(new T.BoxGeometry(13.8, 0.18, 0.28), mat);
+        const top = new T.Mesh(new T.BoxGeometry(5.8, 0.18, 0.28), mat);
         top.position.y = 5;
         gate.add(top);
         this.level.add(gate);

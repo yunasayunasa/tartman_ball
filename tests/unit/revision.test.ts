@@ -63,7 +63,13 @@ describe('移行・高低差・動く床', () => {
     };
     const save = new Save(storage);
     expect(save.records).toEqual({});
-    expect(save.settings).toEqual({ mode: 'stick', sensitivity: 1.4, muted: true });
+    expect(save.settings).toEqual({
+      mode: 'stick',
+      sensitivity: 1.4,
+      muted: true,
+      bgm: 'random',
+      bgmVolume: 0.55,
+    });
     save.records['course-1'] = { time: 150, tarts: 50 };
     expect(save.write()).toBe(true);
     expect(entries.get('sky-tart-roll.v1')).toBe(original);

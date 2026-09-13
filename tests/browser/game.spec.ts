@@ -254,21 +254,26 @@ test('背景へ移った通知で物理を止め、復帰通知だけでは再�
   await page.locator('#resume').click();
   await expect(page.locator('#time')).toBeVisible();
 });
-test('ミュートと感度を保存し、再挑戦後も設定を保持する', async ({ page }) => {
+test('音声と感度の設定を保存し、再挑戦後も保持する', async ({ page }) => {
   await begin(page);
   await page.locator('#pause').click();
   await page.locator('#muted').check();
+  await page.locator('#bgm').selectOption('battle');
+  await page.locator('#bgm-volume').fill('0.35');
   await page.locator('#sensitivity').fill('1.4');
   await page.locator('#restart').click();
   await page.locator('#start').click();
   await page.locator('#pause').click();
   await expect(page.locator('#muted')).toBeChecked();
+  await expect(page.locator('#bgm')).toHaveValue('battle');
+  await expect(page.locator('#bgm-volume')).toHaveValue('0.35');
   await expect(page.locator('#sensitivity')).toHaveValue('1.4');
   await page.reload();
   await page.locator('#course-0').click();
   await page.locator('#start').click();
   await page.locator('#pause').click();
   await expect(page.locator('#muted')).toBeChecked();
+  await expect(page.locator('#bgm')).toHaveValue('battle');
 });
 test('スマホ小画面とタブレットの表示資料を生成する', async ({ page }, info) => {
   await page.goto('/?test');

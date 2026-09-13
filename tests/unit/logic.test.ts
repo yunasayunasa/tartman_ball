@@ -149,9 +149,13 @@ describe('保存', () => {
     const save = new Save(storage);
     save.records['course-1'] = { time: 32.5, tarts: 12 };
     save.settings.mode = 'stick';
+    save.settings.bgm = 'battle';
+    save.settings.bgmVolume = 0.35;
     expect(save.write()).toBe(true);
     expect(new Save(storage).records['course-1'].time).toBe(32.5);
     expect(new Save(storage).settings.mode).toBe('stick');
+    expect(new Save(storage).settings.bgm).toBe('battle');
+    expect(new Save(storage).settings.bgmVolume).toBe(0.35);
   });
   it('破損・保存拒否でも起動できる', () => {
     const broken = new Save({
@@ -175,6 +179,7 @@ describe('保存', () => {
     });
     expect(bad.records).toEqual({});
     expect(bad.settings.sensitivity).toBe(1.8);
+    expect(bad.settings.bgm).toBe('random');
   });
   it('タイム表記の桁上がり', () => {
     expect(formatTime(59.999)).toBe('00:59.99');

@@ -1,9 +1,22 @@
 import type { GameEvent } from './physics';
+import type { BgmChoice } from './storage';
+
+export const bgmTracks = [
+  { id: 'prepare', label: 'Prepare', file: 'prepare.mp3' },
+  { id: 'main-theme', label: 'Main Theme', file: 'main-theme.mp3' },
+  { id: 'cafe', label: 'Cafe', file: 'cafe.mp3' },
+  { id: 'ronpa', label: 'Ronpa', file: 'ronpa.mp3' },
+  { id: 'battle', label: 'Battle', file: 'battle.mp3' },
+  { id: 'enzan', label: 'Enzan', file: 'enzan.mp3' },
+] as const;
+
 export class Sounds {
   muted = false;
+  bgmVolume = 0.55;
   private context?: AudioContext;
   private wind?: GainNode;
   private windFilter?: BiquadFilterNode;
+  private bgm?: HTMLAudioElement;
   unlock() {
     try {
       this.context ??= new AudioContext();
@@ -27,6 +40,36 @@ export class Sounds {
     } catch {
       /* 音を使えない端末でもプレイ可能 */
     }
+  }
+  configure(muted: boolean, bgmVolume: number) {
+    this.muted = muted;
+    this.bgmVolume = bgmVolume;
+    if (this.bgm) this.bgm.volume = muted ? 0 : bgmVolume;
+  }
+  startBgm(choice: BgmChoice) {
+    const track =
+      choice === 'random'
+        ? bgmTracks[Math.floor(Math.random() * bgmTracks.length)]
+        : bgmTracks.find(({ id }) => id === choice)!;
+    this.stopBgm();
+    this.bgm = new Audio(`${import.meta.env.BASE_URL}bgm/${track.file}`);
+    this.bgm.loop = true;
+    this.bgm.preload = 'auto';
+    this.bgm.volume = this.muted ? 0 : this.bgmVolume;
+    void this.bgm.play().catch(() => {});
+  }
+  pauseBgm() {
+    this.bgm?.pause();
+  }
+  resumeBgm() {
+    if (this.bgm) void this.bgm.play().catch(() => {});
+  }
+  stopBgm() {
+    if (!this.bgm) return;
+    this.bgm.pause();
+    this.bgm.removeAttribute('src');
+    this.bgm.load();
+    this.bgm = undefined;
   }
   play(type: GameEvent) {
     const ctx = this.context;
