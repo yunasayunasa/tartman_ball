@@ -18,11 +18,18 @@ export class Sounds {
   private wind?: GainNode;
   private windFilter?: BiquadFilterNode;
   private bgm?: HTMLAudioElement;
+  private bgmGain?: GainNode;
+  private bgmSource?: MediaElementAudioSourceNode;
   private previewTimer?: number;
   unlock() {
     try {
       this.context ??= new AudioContext();
       void this.context.resume().catch(() => {});
+      if (!this.bgmGain) {
+        this.bgmGain = this.context.createGain();
+        this.bgmGain.connect(this.context.destination);
+        this.applyBgmVolume();
+      }
       if (!this.wind) {
         const ctx = this.context;
         const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -46,7 +53,13 @@ export class Sounds {
   configure(muted: boolean, bgmVolume: number) {
     this.muted = muted;
     this.bgmVolume = bgmVolume;
-    if (this.bgm) this.bgm.volume = muted ? 0 : bgmVolume * bgmOutputScale;
+    this.applyBgmVolume();
+  }
+  private applyBgmVolume() {
+    const volume = this.muted ? 0 : this.bgmVolume * bgmOutputScale;
+    if (this.bgmGain && this.context)
+      this.bgmGain.gain.setValueAtTime(volume, this.context.currentTime);
+    if (this.bgm) this.bgm.volume = this.bgmSource ? 1 : volume;
   }
   startBgm(choice: BgmChoice) {
     const track =
@@ -57,7 +70,15 @@ export class Sounds {
     this.bgm = new Audio(`${import.meta.env.BASE_URL}bgm/${track.file}`);
     this.bgm.loop = true;
     this.bgm.preload = 'auto';
-    this.bgm.volume = this.muted ? 0 : this.bgmVolume * bgmOutputScale;
+    if (this.context && this.bgmGain) {
+      try {
+        this.bgmSource = this.context.createMediaElementSource(this.bgm);
+        this.bgmSource.connect(this.bgmGain);
+      } catch {
+        this.bgmSource = undefined;
+      }
+    }
+    this.applyBgmVolume();
     void this.bgm.play().catch(() => {});
   }
   pauseBgm() {
@@ -82,16 +103,18 @@ export class Sounds {
     if (this.previewTimer) window.clearTimeout(this.previewTimer);
     this.previewTimer = undefined;
     this.bgm.pause();
+    this.bgmSource?.disconnect();
+    this.bgmSource = undefined;
     this.bgm.removeAttribute('src');
     this.bgm.load();
     this.bgm = undefined;
   }
   get bgmOutputVolume() {
-    return this.bgm?.volume ?? 0;
+    return this.bgmGain?.gain.value ?? this.bgm?.volume ?? 0;
   }
   play(type: GameEvent) {
     const ctx = this.context;
-    if (!ctx || this.muted || ctx.state !== 'running') return;
+    if (!ctx || this.muted || this.bgmVolume <= 0 || ctx.state !== 'running') return;
     if (type === 'dash') {
       const osc = ctx.createOscillator(),
         gain = ctx.createGain(),
@@ -101,7 +124,7 @@ export class Sounds {
       osc.frequency.exponentialRampToValueAtTime(850, at + 0.13);
       osc.frequency.exponentialRampToValueAtTime(210, at + 0.38);
       gain.gain.setValueAtTime(0, at);
-      gain.gain.linearRampToValueAtTime(0.2, at + 0.009);
+      gain.gain.linearRampToValueAtTime(0.2 * this.bgmVolume * bgmOutputScale, at + 0.009);
       gain.gain.exponentialRampToValueAtTime(0.001, at + 0.4);
       osc.connect(gain).connect(ctx.destination);
       osc.start(at);
@@ -128,7 +151,7 @@ export class Sounds {
       osc.type = 'sine';
       osc.frequency.setValueAtTime(hz, at);
       gain.gain.setValueAtTime(0, at);
-      gain.gain.linearRampToValueAtTime(0.11, at + 0.008);
+      gain.gain.linearRampToValueAtTime(0.11 * this.bgmVolume * bgmOutputScale, at + 0.008);
       gain.gain.exponentialRampToValueAtTime(0.001, at + 0.18);
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -144,7 +167,11 @@ export class Sounds {
     const ctx = this.context;
     if (!ctx || !this.wind || !this.windFilter) return;
     const level = active && !this.muted ? Math.min(1, speed / 24) : 0;
-    this.wind.gain.setTargetAtTime(level * 0.085, ctx.currentTime, 0.06);
+    this.wind.gain.setTargetAtTime(
+      level * 0.085 * this.bgmVolume * bgmOutputScale,
+      ctx.currentTime,
+      0.06,
+    );
     this.windFilter.frequency.setTargetAtTime(450 + level * 1600, ctx.currentTime, 0.06);
   }
 }

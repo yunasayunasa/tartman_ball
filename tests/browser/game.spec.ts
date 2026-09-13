@@ -314,7 +314,7 @@ test('iPad相当の横向きでも縦持ち案内が出て物理は中断する'
   await expect(page.locator('#resume')).toBeVisible();
   await context.close();
 });
-test('ミュート時は効果音ノードを生成しない', async ({ page }) => {
+test('音量0ではBGMと効果音を無音にする', async ({ page }) => {
   await page.addInitScript(() => {
     const original = AudioContext.prototype.createOscillator;
     (window as unknown as { soundCount: number }).soundCount = 0;
@@ -330,7 +330,8 @@ test('ミュート時は効果音ノードを生成しない', async ({ page }) 
     .poll(() => page.evaluate(() => (window as unknown as { soundCount: number }).soundCount))
     .toBeGreaterThan(0);
   await page.locator('#pause').click();
-  await page.locator('#muted').check();
+  await page.locator('#bgm-volume').fill('0');
+  await expect.poll(async () => (await snapshot(page)).bgmVolume).toBe(0);
   await page.locator('#resume').click();
   const count = await page.evaluate(() => (window as unknown as { soundCount: number }).soundCount);
   await page.evaluate((t) => window.__test.teleport({ ...t, y: 0.6 }), tarts[1]);
