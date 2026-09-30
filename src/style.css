@@ -330,10 +330,57 @@ p {
   background: #fffcf0ef;
   border: 1px solid white;
   border-radius: 18px;
-  padding: 13px 18px;
-  display: flex;
-  gap: 22px;
+  padding: 13px 18px 12px;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 22px;
   box-shadow: 0 6px 18px #4f7d9218;
+}
+.hud-stats > div:nth-child(2) {
+  transform-origin: 30% 60%;
+}
+.hud-stats .bump {
+  animation: bump 0.28s ease-out;
+}
+@keyframes bump {
+  35% {
+    transform: scale(1.18);
+    color: #d98b2b;
+  }
+}
+.progress {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 5px;
+  margin-top: 10px;
+  border-radius: 3px;
+  background: #e4ece6;
+}
+.progress b {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #86c7b1, #e8b554);
+  transition: width 0.25s linear;
+}
+.progress .tick {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1.5px solid #9ab4c2;
+}
+.progress .tick.passed {
+  background: #71c69d;
+  border-color: #fff;
+}
+.progress .tick.goal {
+  background: #efbc5a;
+  border-color: #fff;
 }
 .hud small {
   display: block;
@@ -479,8 +526,99 @@ p {
 }
 .result-grid em {
   font-size: 0.63rem;
-  color: #c79b49;
+  color: #8a9e98;
   font-style: normal;
+}
+.result-grid .best {
+  background: #fbf0cf;
+  box-shadow: inset 0 0 0 2px #f1d58e;
+}
+.result-grid .best em {
+  color: #b9852c;
+  font-weight: 800;
+}
+#fade {
+  position: fixed;
+  inset: 0;
+  background: #f6fcff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease-out;
+}
+#fade.on {
+  opacity: 1;
+  transition: opacity 0.35s ease-in 0.25s;
+}
+#splash {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 34%;
+  text-align: center;
+  pointer-events: none;
+  font-size: 4.2rem;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: #fffdf4;
+  -webkit-text-stroke: 2px #3f7f86;
+  text-shadow:
+    0 5px 0 #3f7f86,
+    0 12px 26px #2d5d6a55;
+  opacity: 0;
+}
+#splash.show {
+  animation: splash 0.9s ease-out forwards;
+}
+#splash.goal {
+  color: #fff4c9;
+  -webkit-text-stroke-color: #b3762a;
+  text-shadow:
+    0 5px 0 #b3762a,
+    0 12px 30px #8b5b1f66;
+  animation: goal 2.3s ease-out forwards;
+}
+@keyframes splash {
+  0% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(0.94);
+  }
+  30% {
+    transform: scale(1.04);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.12) translateY(-18px);
+  }
+}
+@keyframes goal {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-8deg);
+  }
+  14% {
+    opacity: 1;
+    transform: scale(1.15) rotate(2deg);
+  }
+  24% {
+    transform: scale(1) rotate(0);
+  }
+  85% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.1);
+  }
 }
 #landscape {
   display: none;

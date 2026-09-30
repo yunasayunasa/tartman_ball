@@ -50,9 +50,36 @@ export class View {
   private follow = new T.Vector3();
   private mixer?: T.AnimationMixer;
   private run?: T.AnimationAction;
-  private particles: { mesh: T.Mesh; velocity: T.Vector3; life: number }[] = [];
+  private particles: {
+    mesh: T.Mesh;
+    velocity: T.Vector3;
+    life: number;
+    maxLife: number;
+    gravity: number;
+    drag: number;
+    spin?: T.Vector3;
+  }[] = [];
   private particleGeometry = new T.IcosahedronGeometry(0.09, 0);
   private particleMaterial = material('#ffe695', { emissive: '#ffba55', emissiveIntensity: 0.3 });
+  private dustMaterial = new T.MeshBasicMaterial({
+    color: '#fffaf0',
+    transparent: true,
+    opacity: 0.75,
+  });
+  private confettiGeometry = new T.PlaneGeometry(0.2, 0.12);
+  private confettiMaterials = [
+    '#ff7eb6',
+    '#ffd65c',
+    '#6fe0ff',
+    '#8cf29a',
+    '#b79bff',
+    '#ffffff',
+  ].map((color) => new T.MeshBasicMaterial({ color, side: T.DoubleSide }));
+  // ゴール後の周回、着地の沈み込み、チェックポイントの輪の広がり。
+  private orbit = 0;
+  private celebration = 0;
+  private impact = 0;
+  private checkpointPulse: number[] = [];
   private placeholder?: T.Group;
   private clouds = new T.Group();
   private time = 0;
@@ -214,8 +241,10 @@ export class View {
     this.tarts.clear();
     this.tartInstances = [];
     this.checkpoints = [];
+    this.checkpointPulse = [];
     this.particles.forEach((p) => this.scene.remove(p.mesh));
     this.particles = [];
+    this.orbit = this.celebration = this.impact = 0;
     const sky = ['#80d3e6', '#e6b36b', '#b9a9e5', '#131b3a', '#474266', '#eb9b85'][course.theme];
     this.renderer.setClearColor(sky);
     if (this.scene.background instanceof T.Texture) this.scene.background.dispose();
@@ -812,20 +841,97 @@ export class View {
     this.follow.set(p.x, p.y, p.z);
     if (this.activeCourse) this.routeCamera.reset(p, this.activeCourse);
     this.actor.position.set(p.x, p.y, p.z);
+    this.impact = 0;
   }
-  effect(type: GameEvent) {
-    if (type === 'dash' || type === 'fall' || type === 'recover') return;
-    const count = type === 'goal' ? 50 : 12;
+  private emit(
+    count: number,
+    geometry: T.BufferGeometry,
+    pick: (i: number) => T.Material,
+    velocity: (i: number) => T.Vector3,
+    options: { life: number; gravity: number; drag?: number; spin?: boolean; offset?: number },
+  ) {
     for (let i = 0; i < count; i++) {
-      const mesh = new T.Mesh(this.particleGeometry, this.particleMaterial);
+      const mesh = new T.Mesh(geometry, pick(i));
       mesh.position.copy(this.actor.position);
+      mesh.position.y += options.offset ?? 0;
       this.scene.add(mesh);
       this.particles.push({
         mesh,
-        velocity: new T.Vector3(Math.sin(i * 2.4) * 2.8, 2 + (i % 5), Math.cos(i * 2.4) * 2.8),
-        life: 1.2,
+        velocity: velocity(i),
+        life: options.life,
+        maxLife: options.life,
+        gravity: options.gravity,
+        drag: options.drag ?? 0,
+        spin: options.spin
+          ? new T.Vector3(Math.random() * 12 - 6, Math.random() * 12 - 6, Math.random() * 12 - 6)
+          : undefined,
       });
     }
+  }
+  /** strength: 着地の強さなど0〜1。'complete' は全タルト収集の祝福。 */
+  effect(type: GameEvent | 'complete', strength = 1) {
+    if (type === 'dash' || type === 'fall' || type === 'recover') return;
+    const sparkle = () => this.particleMaterial;
+    if (type === 'land') {
+      // 足元に広がる土ぼこりと、カメラの小さな沈み込み。
+      this.impact = Math.max(this.impact, strength);
+      const count = 8 + Math.round(strength * 8);
+      this.emit(
+        count,
+        this.particleGeometry,
+        () => this.dustMaterial,
+        (i) => {
+          const a = (i / count) * Math.PI * 2,
+            speed = 1.4 + strength * 2.4;
+          return new T.Vector3(Math.cos(a) * speed, 0.5 + strength * 0.8, Math.sin(a) * speed);
+        },
+        { life: 0.55, gravity: 3, drag: 3.5, offset: -0.42 },
+      );
+      return;
+    }
+    if (type === 'goal') {
+      this.emit(
+        110,
+        this.confettiGeometry,
+        (i) => this.confettiMaterials[i % this.confettiMaterials.length],
+        () => {
+          const a = Math.random() * Math.PI * 2,
+            out = 1.5 + Math.random() * 3.5;
+          return new T.Vector3(Math.cos(a) * out, 5 + Math.random() * 5, Math.sin(a) * out);
+        },
+        { life: 2.8, gravity: 5, drag: 1.1, spin: true },
+      );
+    }
+    if (type === 'complete')
+      this.emit(
+        46,
+        this.particleGeometry,
+        sparkle,
+        (i) => new T.Vector3(Math.sin(i * 2.4) * 4, 3 + (i % 7) * 0.8, Math.cos(i * 2.4) * 4),
+        { life: 1.6, gravity: 6 },
+      );
+    if (type === 'checkpoint' && this.activeCourse) {
+      // 通過した輪を一度大きく広げる。
+      const nearest = this.activeCourse.checkpoints.reduce(
+        (best, cp, i, all) =>
+          this.actor.position.distanceToSquared(new T.Vector3(cp.x, cp.y, cp.z)) <
+          this.actor.position.distanceToSquared(
+            new T.Vector3(all[best].x, all[best].y, all[best].z),
+          )
+            ? i
+            : best,
+        0,
+      );
+      this.checkpointPulse[nearest] = 1;
+    }
+    const count = type === 'checkpoint' ? 22 : type === 'goal' ? 40 : 12;
+    this.emit(
+      count,
+      this.particleGeometry,
+      sparkle,
+      (i) => new T.Vector3(Math.sin(i * 2.4) * 2.8, 2 + (i % 5), Math.cos(i * 2.4) * 2.8),
+      { life: 1.2, gravity: 8 },
+    );
   }
   draw(game: Physics, dt: number, menu: boolean) {
     this.time += dt;
@@ -912,20 +1018,28 @@ export class View {
       tartIndex++;
     }
     for (const instances of this.tartInstances) instances.instanceMatrix.needsUpdate = true;
-    this.checkpoints.forEach((m, i) =>
+    this.checkpoints.forEach((m, i) => {
       (m.material as T.MeshStandardMaterial).color.set(
         i <= game.round.checkpoint ? '#71c69d' : '#8eb3da',
-      ),
-    );
+      );
+      const pulse = (this.checkpointPulse[i] = Math.max(0, (this.checkpointPulse[i] ?? 0) - dt));
+      m.scale.setScalar(1 + (1 - pulse) * pulse * 2.4);
+    });
     if (game.round.phase === 'playing') this.routeCamera.update(p, game.course, dt, speed);
-    const yaw = this.routeCamera.yaw,
-      distance = menu ? 10 : 6 - dashVisual * 0.6 + this.dash.shock * 0.7;
+    // ゴール後は操作がないので、球の周りをゆっくり回って祝う。操作中は常に進路基準の向き。
+    const finished = game.round.phase === 'finished';
+    if (finished) this.orbit += dt * 0.5;
+    else this.orbit = menu ? Math.sin(this.time * 0.12) * 0.45 : 0;
+    this.celebration += ((finished ? 1 : 0) - this.celebration) * (1 - Math.exp(-dt * 3));
+    this.impact = Math.max(0, this.impact - dt * 4);
+    const yaw = this.routeCamera.yaw + this.orbit,
+      distance = menu ? 10 : 6 - dashVisual * 0.6 + this.dash.shock * 0.7 + this.celebration * 1.6;
     this.camera.position
       .copy(this.follow)
       .add(
         new T.Vector3(
           Math.sin(yaw) * distance,
-          menu ? 6 : 3 - dashVisual * 0.55,
+          menu ? 6 : 3 - dashVisual * 0.55 + this.celebration * 0.6 - this.impact * 0.22,
           Math.cos(yaw) * distance,
         ),
       );
@@ -942,9 +1056,18 @@ export class View {
     );
     for (const particle of this.particles) {
       particle.life -= dt;
+      particle.velocity.multiplyScalar(Math.exp(-particle.drag * dt));
       particle.mesh.position.addScaledVector(particle.velocity, dt);
-      particle.velocity.y -= dt * 8;
-      particle.mesh.scale.setScalar(Math.max(0, particle.life));
+      particle.velocity.y -= dt * particle.gravity;
+      if (particle.spin) {
+        particle.mesh.rotation.x += particle.spin.x * dt;
+        particle.mesh.rotation.y += particle.spin.y * dt;
+        particle.mesh.rotation.z += particle.spin.z * dt;
+        particle.mesh.scale.setScalar(Math.min(1, particle.life * 2));
+      } else
+        particle.mesh.scale.setScalar(
+          Math.max(0, Math.min(1, particle.life / (particle.maxLife * 0.8))),
+        );
       if (particle.life <= 0) this.scene.remove(particle.mesh);
     }
     this.particles = this.particles.filter((p) => p.life > 0);

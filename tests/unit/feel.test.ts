@@ -92,3 +92,54 @@ describe('回転橋のタイミング', () => {
     expect(crossAfterDock(course, bridge, 3.2)).toBe(false);
   });
 });
+
+describe('落下・ゴール・着地の物理', () => {
+  it('落下中も球は落ち続け、空中で止まらない', () => {
+    const game = new Physics(courses[0], () => {});
+    game.round.start(0);
+    game.teleport({ x: 60, y: -9, z: -20 });
+    game.step({ x: 0, z: 0 }, 0);
+    expect(game.round.phase).toBe('falling');
+    const y = game.position.y;
+    for (let i = 1; i < 30; i++) game.step({ x: 0, z: 0 }, i * tuning.step);
+    expect(game.round.phase).toBe('falling');
+    expect(game.position.y).toBeLessThan(y - 0.5);
+    game.dispose();
+  });
+  it('ゴール後は入力を受けずに止まり、結果は変わらない', () => {
+    const events: string[] = [];
+    const course = courses[3],
+      game = new Physics(course, (e) => events.push(e));
+    game.round.start(0);
+    const goal = course.goal;
+    game.teleport({ ...goal, z: goal.z + 1.5, y: goal.y + 0.6 });
+    game.ball.setLinvel({ x: 0, y: 0, z: -20 }, true);
+    for (let i = 0; i < 10 && game.round.phase === 'playing'; i++)
+      game.step({ x: 0, z: -1 }, i * tuning.step);
+    expect(game.round.phase).toBe('finished');
+    const time = game.round.finishedTime;
+    for (let i = 0; i < 360; i++) game.step({ x: 1, z: -1 }, 1 + i * tuning.step);
+    const v = game.ball.linvel();
+    expect(Math.hypot(v.x, v.z)).toBeLessThan(0.3);
+    // 最高速度で入っても、ゴールの島から落ちない。
+    expect(Math.hypot(game.position.x - goal.x, game.position.z - goal.z)).toBeLessThan(6.5);
+    expect(game.position.y).toBeGreaterThan(goal.y);
+    expect(game.round.finishedTime).toBe(time);
+    expect(events.filter((e) => e === 'goal')).toHaveLength(1);
+    game.dispose();
+  });
+  it('ジャンプからの着地を一度だけ知らせ、強さを渡す', () => {
+    const events: string[] = [];
+    const course = courses[1],
+      game = new Physics(course, (e) => events.push(e));
+    game.round.start(0);
+    const pad = course.pads.find((p) => p.type === 'jump')!;
+    game.teleport({ ...pad, y: (pad.y ?? 0) + 0.52 });
+    for (let i = 0; i < 240; i++) game.step({ x: 0, z: 0 }, i * tuning.step);
+    expect(events).toContain('jump');
+    expect(events.filter((e) => e === 'land')).toHaveLength(1);
+    expect(events.indexOf('land')).toBeGreaterThan(events.indexOf('jump'));
+    expect(game.landingSpeed).toBeGreaterThan(4);
+    game.dispose();
+  });
+});
