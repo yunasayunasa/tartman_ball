@@ -33,15 +33,38 @@ export class Physics {
   ) {
     this.world = new RAPIER.World({ x: 0, y: tuning.gravity, z: 0 });
     this.world.timestep = tuning.step;
+    // 路面は摩擦ごとに1枚の三角形メッシュへまとめる。継ぎ目の段差判定で球が跳ねないよう、
+    // 隣接三角形の法線を考慮する FIX_INTERNAL_EDGES を使う。
+    const surfaces = new Map<number, number[]>();
+    const addTriangle = (friction: number, ...corners: Vec[]) => {
+      if (!surfaces.has(friction)) surfaces.set(friction, []);
+      surfaces.get(friction)!.push(...corners.flatMap((v) => [v.x, v.y, v.z]));
+    };
     for (const p of course.platforms) {
+      const friction = p.surface === 'ice' ? 0.06 : 0.35;
       if (p.vertices) {
-        const coords = new Float32Array(p.vertices.flatMap((v) => [v.x, v.y, v.z]));
-        this.world.createCollider(
-          RAPIER.ColliderDesc.trimesh(coords, new Uint32Array([0, 1, 2, 0, 2, 3])).setFriction(
-            p.surface === 'ice' ? 0.06 : 0.35,
-          ),
-        );
+        const [a, b, c, d] = p.vertices;
+        addTriangle(friction, a, b, c);
+        addTriangle(friction, a, c, d);
         continue;
+      }
+      // 固定の島は、路面と同じ高さの上面をメッシュへ加え、円柱の縁は少し下げる。
+      // 路面から島へ乗り移るときに縁へ当たって跳ねない。
+      const deck = !!p.shape && !p.motion;
+      if (deck) {
+        const sides = p.shape === 'hex' ? 6 : 24,
+          angle = p.angle ?? 0;
+        const rim = Array.from({ length: sides }, (_, i) => {
+          const a = (i / sides) * Math.PI * 2,
+            x = (Math.cos(a) * p.w) / 2,
+            z = (Math.sin(a) * p.d) / 2;
+          return {
+            x: p.x + x * Math.cos(angle) + z * Math.sin(angle),
+            y: p.y,
+            z: p.z - x * Math.sin(angle) + z * Math.cos(angle),
+          };
+        });
+        rim.forEach((v, i) => addTriangle(friction, p, v, rim[(i + 1) % sides]));
       }
       const pose = platformPose(p, 0);
       const body = p.motion
@@ -71,7 +94,11 @@ export class Physics {
               )!
             : RAPIER.ColliderDesc.cuboid(p.w / 2, 0.5, p.d / 2)
         )
-          .setTranslation(body ? 0 : p.x, body ? -0.5 : p.y - 0.5, body ? 0 : p.z)
+          .setTranslation(
+            body ? 0 : p.x,
+            body ? -0.5 : p.y - 0.5 - (deck ? 0.04 : 0),
+            body ? 0 : p.z,
+          )
           .setRotation({
             x: 0,
             y: body ? 0 : Math.sin((p.angle ?? 0) / 2),
@@ -81,6 +108,26 @@ export class Physics {
           .setFriction(p.surface === 'ice' ? 0.06 : 0.35)
           .setRestitution(0),
         body,
+      );
+    }
+    for (const [friction, coords] of surfaces) {
+      const triangles = coords.length / 9,
+        indices = new Uint32Array(triangles * 3);
+      for (let t = 0; t < triangles; t++) {
+        // 生成元によって巻き順が異なるため、すべて上向きの面にそろえる。
+        const at = (i: number, axis: number) => coords[t * 9 + i * 3 + axis];
+        const up =
+          (at(1, 2) - at(0, 2)) * (at(2, 0) - at(0, 0)) -
+            (at(1, 0) - at(0, 0)) * (at(2, 2) - at(0, 2)) >=
+          0;
+        indices.set(up ? [t * 3, t * 3 + 1, t * 3 + 2] : [t * 3, t * 3 + 2, t * 3 + 1], t * 3);
+      }
+      this.world.createCollider(
+        RAPIER.ColliderDesc.trimesh(
+          new Float32Array(coords),
+          indices,
+          RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+        ).setFriction(friction),
       );
     }
     this.ball = this.world.createRigidBody(
