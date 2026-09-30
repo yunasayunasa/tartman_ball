@@ -147,9 +147,52 @@ export function onPlatform(q: Point, p: Platform, margin = 0): boolean {
     [0, -margin],
   ].every(([x, z]) => surfaceHeight({ x: q.x + x, z: q.z + z }, p) !== undefined);
 }
+// 足場の平面範囲を8m四方の格子に登録し、近くの足場だけを調べる。
+// 各マスは元の配列順を保つので、find() が選ぶ足場は全件走査と同じになる。
+const cellSize = 8;
+const grids = new WeakMap<Platform[], Map<number, Platform[]>>();
+const cellKey = (ix: number, iz: number) => (ix + 32768) * 65536 + (iz + 32768);
+function grid(platforms: Platform[]) {
+  let cells = grids.get(platforms);
+  if (cells) return cells;
+  cells = new Map();
+  for (const p of platforms) {
+    let minX: number, maxX: number, minZ: number, maxZ: number;
+    if (p.vertices) {
+      minX = Math.min(...p.vertices.map((v) => v.x));
+      maxX = Math.max(...p.vertices.map((v) => v.x));
+      minZ = Math.min(...p.vertices.map((v) => v.z));
+      maxZ = Math.max(...p.vertices.map((v) => v.z));
+    } else {
+      // 回転しても収まる外接円。横移動する足場は振れ幅も含める。
+      const r = Math.hypot(p.w, p.d) / 2,
+        slide = p.motion?.kind === 'slide' ? Math.abs(p.motion.amplitude) : 0;
+      minX = p.x - r - slide;
+      maxX = p.x + r + slide;
+      minZ = p.z - r;
+      maxZ = p.z + r;
+    }
+    for (let ix = Math.floor(minX / cellSize); ix <= Math.floor(maxX / cellSize); ix++)
+      for (let iz = Math.floor(minZ / cellSize); iz <= Math.floor(maxZ / cellSize); iz++) {
+        const key = cellKey(ix, iz);
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key)!.push(p);
+      }
+  }
+  grids.set(platforms, cells);
+  return cells;
+}
+const none: Platform[] = [];
+/** 平面位置 q の真上・真下にあり得る足場（元の順序）。 */
+export function platformsNear(course: Course, q: Point): Platform[] {
+  return (
+    grid(course.platforms).get(cellKey(Math.floor(q.x / cellSize), Math.floor(q.z / cellSize))) ??
+    none
+  );
+}
 export function safeAt(q: Vec, course: Course): boolean {
   const supports = (point: Point) =>
-    course.platforms.some(
+    platformsNear(course, point).some(
       (p) => p.safe && !p.motion && Math.abs((surfaceHeight(point, p) ?? -999) - q.y + 0.52) < 0.2,
     );
   return (

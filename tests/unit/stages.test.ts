@@ -1,5 +1,11 @@
 import { beforeAll, expect, it } from 'vitest';
-import { courses, platformPose, restRemaining, surfaceHeight } from '../../src/courses';
+import {
+  courses,
+  platformPose,
+  platformsNear,
+  restRemaining,
+  surfaceHeight,
+} from '../../src/courses';
 import { initPhysics, Physics } from '../../src/physics';
 import { tuning } from '../../src/config';
 beforeAll(initPhysics);
@@ -125,4 +131,20 @@ it('rotating bridges rest connected for a readable window, then swing smoothly',
       expect(docked).toBeCloseTo(m.dwell! * m.period, 0);
       expect(restRemaining(bridge, 0.001)).toBeGreaterThan(0);
     }
+});
+
+it('the platform grid finds exactly the same supports as scanning every platform', () => {
+  for (const course of courses)
+    for (let i = 0; i < course.route.length; i += 3)
+      for (const [dx, dz, t] of [
+        [0, 0, 0],
+        [3.7, -1.2, 2.5],
+        [-6.1, 4.4, 5.3],
+        [9.5, 9.5, 7.9],
+      ]) {
+        const q = { x: course.route[i].x + dx, z: course.route[i].z + dz };
+        const hits = (list: typeof course.platforms) =>
+          list.filter((p) => surfaceHeight(q, p, t) !== undefined).map((p) => p.id);
+        expect(hits(platformsNear(course, q)), course.name).toEqual(hits(course.platforms));
+      }
 });

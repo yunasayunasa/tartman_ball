@@ -6,6 +6,7 @@ import {
   type Platform,
   type Surface,
   platformPose,
+  platformsNear,
   surfaceHeight,
   safeAt,
 } from './courses';
@@ -244,7 +245,7 @@ export class Physics {
     this.moveMechanisms();
     const before = this.position,
       velocity = this.ball.linvel();
-    const support = this.course.platforms.find((p) => {
+    const support = platformsNear(this.course, before).find((p) => {
       const y = surfaceHeight(before, p, this.simulationTime);
       return y !== undefined && Math.abs(before.y - tuning.radius - y) < 0.18;
     });
@@ -419,7 +420,7 @@ export class Physics {
       r.finish(now)
     )
       this.event('goal');
-    const lowerFloor = this.course.platforms.some((p) => {
+    const lowerFloor = platformsNear(this.course, pos).some((p) => {
       const h = surfaceHeight(pos, p, this.simulationTime);
       return h !== undefined && h < pos.y && h >= pos.y - 18;
     });

@@ -4,6 +4,7 @@ import { characterConfig, tuning } from './config';
 import {
   surfaceHeight,
   platformPose,
+  platformsNear,
   restRemaining,
   surfaceColors,
   type Platform,
@@ -960,10 +961,11 @@ export class View {
       (wind.mesh.material as T.MeshBasicMaterial).opacity = Math.sin(phase * Math.PI) * 0.65;
     }
     this.actor.position.set(p.x, p.y, p.z);
-    const ground = game.course.platforms
-      .map((s) => surfaceHeight(p, s, game.simulationTime))
-      .filter((y): y is number => y !== undefined && y <= p.y)
-      .sort((a, b) => b - a)[0];
+    let ground: number | undefined;
+    for (const s of platformsNear(game.course, p)) {
+      const y = surfaceHeight(p, s, game.simulationTime);
+      if (y !== undefined && y <= p.y && (ground === undefined || y > ground)) ground = y;
+    }
     this.shadow.position.set(p.x, (ground ?? 0) + 0.065, p.z);
     this.shadow.visible = ground !== undefined && p.y - ground < 5;
     this.shadow.scale.setScalar(Math.max(0.4, 1 - Math.max(0, p.y - 0.52) * 0.12));
