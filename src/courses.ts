@@ -10,6 +10,8 @@ export type Motion = {
   period: number;
   stops?: boolean;
   phase?: number;
+  /** 周期のうち、基準の向き（道とつながる位置）で静止する割合。回転橋の「待って渡る」を成立させる。 */
+  dwell?: number;
 };
 export type Platform = {
   id: string;
@@ -73,15 +75,37 @@ export const surfaceColors: Record<Surface, string> = {
   ice: '#b3f3ff',
   copper: '#d98c5f',
 };
+// 周期内の位置（0〜1）。phaseはラジアンで指定する。
+function cycle(m: Motion, time: number) {
+  const s = time / m.period + (m.phase ?? 0) / (Math.PI * 2);
+  return s - Math.floor(s);
+}
+/** 静止区間を持つ動きで、揺れ始めるまでの残り秒数。揺れている間は0。 */
+export function restRemaining(p: Platform, time: number) {
+  const m = p.motion;
+  if (!m?.dwell) return 0;
+  return Math.max(0, (m.dwell - cycle(m, time)) * m.period);
+}
+function dwellWave(m: Motion, time: number) {
+  const s = cycle(m, time),
+    dwell = m.dwell!;
+  if (s < dwell) return 0;
+  // 片側へ振れて戻る。振れる向きは周期ごとに左右交互。始点と終点で速度0になり、静止から滑らかに動き出す。
+  const u = (s - dwell) / (1 - dwell),
+    side = Math.floor(time / m.period + (m.phase ?? 0) / (Math.PI * 2)) % 2 ? -1 : 1;
+  return ((1 - Math.cos(Math.PI * 2 * u)) / 2) * side;
+}
 export function platformPose(p: Platform, time: number): { position: Vec; angle: number } {
   const m = p.motion,
     wave = m
-      ? (m.stops
-          ? Math.max(
-              -1,
-              Math.min(1, -Math.cos((time * Math.PI * 2) / m.period + (m.phase ?? 0)) * 1.8),
-            )
-          : Math.sin((time * Math.PI * 2) / m.period + (m.phase ?? 0))) * m.amplitude
+      ? (m.dwell
+          ? dwellWave(m, time)
+          : m.stops
+            ? Math.max(
+                -1,
+                Math.min(1, -Math.cos((time * Math.PI * 2) / m.period + (m.phase ?? 0)) * 1.8),
+              )
+            : Math.sin((time * Math.PI * 2) / m.period + (m.phase ?? 0))) * m.amplitude
       : 0;
   return {
     position: {

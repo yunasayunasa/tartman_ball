@@ -4,6 +4,7 @@ import { characterConfig, tuning } from './config';
 import {
   surfaceHeight,
   platformPose,
+  restRemaining,
   surfaceColors,
   type Platform,
   type Course,
@@ -36,7 +37,7 @@ export class View {
   private level = new T.Group();
   private routeCamera = new RouteCamera();
   private activeCourse?: Course;
-  private movers: { group: T.Group; platform: Platform }[] = [];
+  private movers: { group: T.Group; platform: Platform; trim: T.MeshStandardMaterial }[] = [];
   private rotors: T.Group[] = [];
   private winds: { mesh: T.Mesh; origin: T.Vector3; direction: T.Vector3; phase: number }[] = [];
   private actor = new T.Group();
@@ -331,15 +332,21 @@ export class View {
         group.rotation.y = p.angle ?? 0;
         this.level.add(group);
         if (p.motion) {
-          this.movers.push({ group, platform: p });
           const trimMaterial = material(p.motion.kind === 'lift' ? '#70e8ff' : '#ffe7a2', {
             emissive: '#58baca',
             emissiveIntensity: 0.6,
           });
+          this.movers.push({ group, platform: p, trim: trimMaterial });
+          // 静止区間のある橋は、つながり具合を遠くから読めるよう光の縁を太くし、両端にも付ける。
+          const signal = p.motion.dwell ? 0.3 : 0.12;
           for (const side of [-1, 1]) {
-            const trim = new T.Mesh(new T.BoxGeometry(0.12, 0.07, p.d), trimMaterial);
-            trim.position.set(side * (p.w / 2 - 0.12), 0.05, 0);
+            const trim = new T.Mesh(new T.BoxGeometry(signal, 0.07, p.d), trimMaterial);
+            trim.position.set(side * (p.w / 2 - signal), 0.05, 0);
             group.add(trim);
+            if (!p.motion.dwell) continue;
+            const end = new T.Mesh(new T.BoxGeometry(p.w, 0.07, signal), trimMaterial);
+            end.position.set(0, 0.05, side * (p.d / 2 - signal));
+            group.add(end);
           }
           if (p.motion.kind === 'lift')
             for (const side of [-1, 1]) {
@@ -826,10 +833,19 @@ export class View {
       v = game.ball.linvel();
     const target = new T.Vector3(p.x, p.y, p.z);
     if (game.round.phase !== 'falling') this.follow.lerp(target, 1 - Math.exp(-dt * 12));
-    for (const { platform, group } of this.movers) {
+    for (const { platform, group, trim } of this.movers) {
       const pose = platformPose(platform, game.simulationTime);
       group.position.set(pose.position.x, pose.position.y, pose.position.z);
       group.rotation.y = pose.angle;
+      if (!platform.motion?.dwell) continue;
+      // 緑: つながっている。橙の点滅: まもなく振れる。赤: 振れている最中。
+      const rest = restRemaining(platform, game.simulationTime);
+      const blink = rest > 0 && rest < 1.2 && Math.sin(this.time * 22) > 0;
+      const color =
+        rest >= 1.2 ? '#7dffb2' : rest > 0 ? (blink ? '#ffb347' : '#fff1c9') : '#ff7a6b';
+      trim.color.set(color);
+      trim.emissive.set(color);
+      trim.emissiveIntensity = rest > 0 ? 0.9 : 0.35;
     }
     for (const rotor of this.rotors) rotor.rotation.z = -game.simulationTime * 0.45;
     for (const wind of this.winds) {

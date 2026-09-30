@@ -133,7 +133,8 @@ class Stage {
       d: depth,
       surface,
       safe: !motion,
-      recoverySafe: true,
+      // 回転橋の上は、戻した直後に振れて再落下しやすい。手前の島へ戻す。
+      recoverySafe: motion?.kind !== 'rotate',
       shape,
       motion,
       angle,
@@ -276,10 +277,15 @@ function candy() {
       const bridge = point(cp.x, cp.z - 19, cp.y),
         dock = point(cp.x, cp.z - 38, cp.y);
       s.road([cp, point(cp.x, cp.z - 8, cp.y)], 6, 'cookie');
-      s.deck(bridge, 5, 26, 'candy', undefined, { kind: 'rotate', amplitude: 0.65, period: 7 });
+      s.deck(bridge, 5, 26, 'candy', undefined, {
+        kind: 'rotate',
+        amplitude: 0.65,
+        period: 8,
+        dwell: 0.55,
+      });
       s.deck(dock, 12, 12, 'cookie', 'disc');
       s.route([point(cp.x, cp.z - 8, cp.y), bridge, dock]);
-      s.section(cp, 'WAFER TURN', '橋がつながるのを待とう');
+      s.section(cp, 'WAFER TURN', '橋が緑に光ったら、一気に渡ろう');
       anchor = dock;
     } else anchor = cp;
   }
@@ -402,7 +408,7 @@ function windmill() {
   for (let act = 0; act < 3; act++) {
     const entry = point(anchor.x, anchor.z - 30, anchor.y);
     s.road([anchor, entry], 9, 'wood');
-    s.section(entry, 'TURNING BRIDGES', '橋の向きがそろったら渡ろう');
+    s.section(entry, 'TURNING BRIDGES', '緑に光る間に渡ろう。点滅は動く合図');
     let dock = entry;
     s.deck(dock, 12, 12, 'grass', 'disc');
     for (let j = 0; j < 3; j++) {
@@ -415,7 +421,7 @@ function windmill() {
         Math.hypot(next.x - dock.x, next.z - dock.z) - 9,
         'copper',
         undefined,
-        { kind: 'rotate', amplitude: 1.05, period: 7 + j, phase: j * 0.5 },
+        { kind: 'rotate', amplitude: 1.05, period: 9 - j, phase: j * 0.5, dwell: 0.45 },
         Math.atan2(d.x, d.z),
       );
       s.deck(next, 12, 12, 'grass', 'disc');

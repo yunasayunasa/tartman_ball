@@ -1,5 +1,5 @@
 import { beforeAll, expect, it } from 'vitest';
-import { courses, platformPose, surfaceHeight } from '../../src/courses';
+import { courses, platformPose, restRemaining, surfaceHeight } from '../../src/courses';
 import { initPhysics, Physics } from '../../src/physics';
 import { tuning } from '../../src/config';
 beforeAll(initPhysics);
@@ -95,11 +95,34 @@ it('crystal lifts physically carry a standing ball from the lower dock to the up
 
 it('rotating bridges change their physical footprint and have no fixed bypass below', () => {
   const course = courses[5],
-    bridge = course.platforms.find((p) => p.motion)!;
+    bridge = course.platforms.find((p) => p.motion)!,
+    m = bridge.motion!;
   const q = { x: bridge.x, z: bridge.z + bridge.d / 2 - 3 };
   expect(surfaceHeight(q, bridge, 0)).toBeDefined();
-  expect(surfaceHeight(q, bridge, bridge.motion!.period / 4)).toBeUndefined();
+  // 静止区間の後、振れ幅が最大付近になる時刻。
+  const swing = m.period * (m.dwell! + (1 - m.dwell!) * 0.3);
+  expect(surfaceHeight(q, bridge, swing)).toBeUndefined();
   expect(course.platforms.some((p) => p !== bridge && surfaceHeight(q, p) !== undefined)).toBe(
     false,
   );
+});
+
+it('rotating bridges rest connected for a readable window, then swing smoothly', () => {
+  for (const course of [courses[2], courses[5]])
+    for (const bridge of course.platforms.filter((p) => p.motion?.kind === 'rotate')) {
+      const m = bridge.motion!;
+      expect(m.dwell! * m.period, course.name + bridge.id).toBeGreaterThanOrEqual(3);
+      expect(bridge.recoverySafe).toBe(false);
+      let docked = 0,
+        previous = platformPose(bridge, 0).angle;
+      for (let t = 0; t < m.period; t += 0.01) {
+        const angle = platformPose(bridge, t).angle;
+        if (Math.abs(angle - (bridge.angle ?? 0)) < 1e-9) docked += 0.01;
+        // 急に跳ねる動きをしない（最大角速度の上限）。
+        expect(Math.abs(angle - previous)).toBeLessThan(0.02);
+        previous = angle;
+      }
+      expect(docked).toBeCloseTo(m.dwell! * m.period, 0);
+      expect(restRemaining(bridge, 0.001)).toBeGreaterThan(0);
+    }
 });

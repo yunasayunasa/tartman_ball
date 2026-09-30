@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { courses } from '../../src/courses';
+import { courses, restRemaining, type Course, type Platform, type Vec } from '../../src/courses';
 import { initPhysics, Physics } from '../../src/physics';
 import { tuning } from '../../src/config';
+import { normalize } from '../../src/input';
 beforeAll(initPhysics);
 
 // 直線を一定入力で転がし、上下方向の速度の最大値を測る。
@@ -33,5 +34,61 @@ describe('転がりの手触り', () => {
     const { bump, end } = roll(index, from, speed, 1.5);
     expect(end.z).toBeLessThan(from.z - 10);
     expect(bump).toBeLessThan(0.3);
+  });
+});
+
+// 手前の島で待ち、橋が緑（静止）になってから reaction 秒後に対岸へ全力で傾ける。
+function crossAfterDock(course: Course, bridge: Platform, reaction: number) {
+  const axis = { x: Math.sin(bridge.angle ?? 0), z: Math.cos(bridge.angle ?? 0) };
+  const decks = course.platforms.filter((p) => p.shape === 'disc' && !p.motion);
+  const nearest = (x: number, z: number) =>
+    decks.reduce((a, d) => (Math.hypot(d.x - x, d.z - z) < Math.hypot(a.x - x, a.z - z) ? d : a));
+  let from: Vec = nearest(bridge.x - (axis.x * bridge.d) / 2, bridge.z - (axis.z * bridge.d) / 2),
+    to: Vec = nearest(bridge.x + (axis.x * bridge.d) / 2, bridge.z + (axis.z * bridge.d) / 2);
+  if (from.z < to.z) [from, to] = [to, from];
+  const game = new Physics(course, () => {});
+  game.round.start(0);
+  game.teleport({ ...from, y: from.y + 0.6 });
+  let t = 0;
+  const step = (x: number, z: number) => {
+    game.step(normalize(x, z), t);
+    t += tuning.step;
+  };
+  const hold = () => {
+    const v = game.ball.linvel(),
+      p = game.position;
+    step((from.x - p.x) * 0.5 - v.x * 0.8, (from.z - p.z) * 0.5 - v.z * 0.8);
+  };
+  const full = bridge.motion!.dwell! * bridge.motion!.period;
+  // 次に緑へ変わる瞬間まで待つ。
+  while (t < 1 || restRemaining(bridge, game.simulationTime) < full - 0.05) hold();
+  const go = t + reaction;
+  while (t < go) hold();
+  const length = Math.hypot(to.x - from.x, to.z - from.z),
+    d = { x: (to.x - from.x) / length, z: (to.z - from.z) / length };
+  try {
+    for (const end = t + 8; t < end;) {
+      if (game.round.phase !== 'playing') return false;
+      const p = game.position;
+      if (Math.hypot(p.x - to.x, p.z - to.z) < 2.5 && game.grounded) return true;
+      const along = (p.x - from.x) * d.x + (p.z - from.z) * d.z;
+      step(d.x - (p.x - from.x - along * d.x) * 0.5, d.z - (p.z - from.z - along * d.z) * 0.5);
+    }
+    return false;
+  } finally {
+    game.dispose();
+  }
+}
+
+describe('回転橋のタイミング', () => {
+  it.each([
+    ['お菓子のウエハース橋', 2, 0],
+    ['風車群島の最後の橋', 5, 2],
+  ] as const)('%s: 緑になってすぐ渡れば成功し、出遅れると落ちる', (_, index, bridgeIndex) => {
+    const course = courses[index],
+      bridge = course.platforms.filter((p) => p.motion?.kind === 'rotate')[bridgeIndex];
+    expect(crossAfterDock(course, bridge, 0.4)).toBe(true);
+    expect(crossAfterDock(course, bridge, 1.6)).toBe(true);
+    expect(crossAfterDock(course, bridge, 3.2)).toBe(false);
   });
 });
