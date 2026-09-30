@@ -441,6 +441,12 @@ sideways.addEventListener('change', (e) => {
   input.clear();
   if (e.matches) pause();
 });
+// 画面回転の change 通知が届かないブラウザーもあるため、サイズ変更でも確かめる。
+window.addEventListener('resize', () => {
+  if (!sideways.matches || screenState !== 'play') return;
+  input.clear();
+  pause();
+});
 canvas.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
   pause('描画が停止しました。ページを再読み込みしてください。保存済みの記録は保持されます。');

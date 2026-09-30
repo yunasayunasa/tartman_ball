@@ -312,7 +312,8 @@ test('iPad相当の横向きでも縦持ち案内が出て物理は中断する'
   await page.locator('#start').click();
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect(page.locator('#landscape')).toBeVisible();
-  expect((await snapshot(page)).phase).toBe('paused');
+  // CSSの切り替えと、回転を知らせるイベントの処理は同じフレームとは限らない。
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('paused');
   await page.setViewportSize({ width: 768, height: 1024 });
   await expect(page.locator('#landscape')).not.toBeVisible();
   await expect(page.locator('#resume')).toBeVisible();

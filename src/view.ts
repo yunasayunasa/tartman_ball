@@ -368,7 +368,7 @@ export class View {
           });
           this.movers.push({ group, platform: p, trim: trimMaterial });
           // 静止区間のある橋は、つながり具合を遠くから読めるよう光の縁を太くし、両端にも付ける。
-          const signal = p.motion.dwell ? 0.3 : 0.12;
+          const signal = p.motion.dwell ? 0.42 : 0.12;
           for (const side of [-1, 1]) {
             const trim = new T.Mesh(new T.BoxGeometry(signal, 0.07, p.d), trimMaterial);
             trim.position.set(side * (p.w / 2 - signal), 0.05, 0);
@@ -949,10 +949,10 @@ export class View {
       const rest = restRemaining(platform, game.simulationTime);
       const blink = rest > 0 && rest < 1.2 && Math.sin(this.time * 22) > 0;
       const color =
-        rest >= 1.2 ? '#7dffb2' : rest > 0 ? (blink ? '#ffb347' : '#fff1c9') : '#ff7a6b';
+        rest >= 1.2 ? '#19d665' : rest > 0 ? (blink ? '#ff8c1a' : '#ffe08a') : '#ff4040';
       trim.color.set(color);
       trim.emissive.set(color);
-      trim.emissiveIntensity = rest > 0 ? 0.9 : 0.35;
+      trim.emissiveIntensity = rest > 0 ? 0.45 : 0.2;
     }
     for (const rotor of this.rotors) rotor.rotation.z = -game.simulationTime * 0.45;
     for (const wind of this.winds) {
