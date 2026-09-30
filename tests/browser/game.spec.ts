@@ -196,12 +196,16 @@ test('全収集マークと最初から再挑戦の初期化', async ({ page }) 
   }
   await page.evaluate(() => window.__test.teleport({ ...window.__test.course().goal, y: 0.6 }));
   await expect(page.locator('.result')).toContainText('全タルト収集');
+  // 「もう一度」は準備画面を挟まず、初期化した新しいラウンドをすぐ始める。
   await page.locator('#restart').click();
+  await expect(page.locator('#time')).toBeVisible();
   const state = await snapshot(page);
-  expect(state.phase).toBe('ready');
+  expect(state.phase).toBe('playing');
   expect(state.tarts).toHaveLength(0);
   expect(state.checkpoint).toBe(-1);
-  expect(state.elapsed).toBe(0);
+  expect(state.falls).toBe(0);
+  expect(state.elapsed).toBeLessThan(3);
+  await expect(page.locator('#tarts')).toHaveText(`0 / ${tarts.length}`);
 });
 test('破損した保存データと保存拒否でも遊べる', async ({ page }) => {
   await page.addInitScript(() => {
@@ -265,7 +269,7 @@ test('音声と感度の設定を保存し、再挑戦後も保持する', async
   await expect.poll(async () => (await snapshot(page)).bgmVolume).toBe(0);
   await page.locator('#sensitivity').fill('1.4');
   await page.locator('#restart').click();
-  await page.locator('#start').click();
+  await expect(page.locator('#time')).toBeVisible();
   await page.locator('#pause').click();
   await expect(page.locator('#muted')).toBeChecked();
   await expect(page.locator('#bgm')).toHaveValue('battle');
@@ -308,7 +312,8 @@ test('iPad相当の横向きでも縦持ち案内が出て物理は中断する'
   await page.locator('#start').click();
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect(page.locator('#landscape')).toBeVisible();
-  expect((await snapshot(page)).phase).toBe('paused');
+  // CSSの切り替えと、回転を知らせるイベントの処理は同じフレームとは限らない。
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('paused');
   await page.setViewportSize({ width: 768, height: 1024 });
   await expect(page.locator('#landscape')).not.toBeVisible();
   await expect(page.locator('#resume')).toBeVisible();
@@ -339,4 +344,48 @@ test('音量0ではBGMと効果音を無音にする', async ({ page }) => {
   expect(await page.evaluate(() => (window as unknown as { soundCount: number }).soundCount)).toBe(
     count,
   );
+});
+test('ゴール後は祝福してから結果へ。前回との差と次のコースを示す', async ({ page }) => {
+  await begin(page);
+  const reachGoal = () =>
+    page.evaluate(() => {
+      const goal = window.__test.course().goal;
+      window.__test.teleport({ ...goal, y: goal.y + 0.6 });
+    });
+  await reachGoal();
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('finished');
+  // 記録はゴールの瞬間に確定し、祝福の間も変わらない。
+  const frozen = (await snapshot(page)).elapsed;
+  await expect(page.locator('#splash')).toHaveClass(/goal/);
+  await expect(page.locator('#pause')).toBeHidden();
+  await expect(page.locator('.result')).toBeVisible();
+  expect((await snapshot(page)).records['course-1'].time).toBe(frozen);
+  await expect(page.locator('.result')).toContainText('自己ベスト更新');
+  // 2回目は遅くゴールし、ベストとの差を表示する。画面タップで祝福を飛ばせる。
+  await page.locator('#restart').click();
+  await expect(page.locator('#time')).toBeVisible();
+  await page.waitForTimeout(Math.max(0, frozen * 1000 + 400));
+  await reachGoal();
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('finished');
+  await page.locator('#world').dispatchEvent('pointerdown');
+  await expect(page.locator('.result')).toBeVisible();
+  await expect(page.locator('.result')).toContainText('ベスト ');
+  await expect(page.locator('.result')).toContainText('秒）');
+  expect((await snapshot(page)).records['course-1'].time).toBe(frozen);
+  await page.locator('#next').click();
+  await expect(page.locator('.panel h2')).toContainText('琥珀砂漠');
+  await expect(page.locator('#start')).toBeVisible();
+});
+test('進行バーは走った分だけ伸び、通過したチェックポイントに印を付ける', async ({ page }) => {
+  await begin(page);
+  const width = () =>
+    page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('progress')!).width));
+  const start = await width();
+  await page.evaluate(() => {
+    const cp = window.__test.course().checkpoints[1];
+    window.__test.teleport({ ...cp, y: cp.y + 0.6 });
+  });
+  await expect.poll(async () => (await snapshot(page)).checkpoint).toBe(1);
+  await expect.poll(width).toBeGreaterThan(start + 20);
+  await expect(page.locator('.progress .tick.passed')).toHaveCount(1);
 });

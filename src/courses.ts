@@ -10,6 +10,8 @@ export type Motion = {
   period: number;
   stops?: boolean;
   phase?: number;
+  /** 周期のうち、基準の向き（道とつながる位置）で静止する割合。回転橋の「待って渡る」を成立させる。 */
+  dwell?: number;
 };
 export type Platform = {
   id: string;
@@ -26,6 +28,18 @@ export type Platform = {
   motion?: Motion;
   shape?: 'disc' | 'hex';
   effect?: { kind: 'conveyor' | 'wind'; x: number; z: number; strength: number };
+  /** 描画用: 道の四角形が道全体のどこにあるか。物理は使わない。 */
+  lane?: Lane;
+};
+/**
+ * vertices の [0]→[1] が片側、[3]→[2] が反対側の辺。
+ * outer: その辺が道の外縁か。along: [0]/[1] 行の道なりの距離（m）。across: 両辺の幅方向の位置（0〜1）。
+ */
+export type Lane = {
+  outer: [boolean, boolean];
+  along: [number, number];
+  across: [number, number];
+  width: number;
 };
 export type Pad = {
   id: string;
@@ -73,15 +87,37 @@ export const surfaceColors: Record<Surface, string> = {
   ice: '#b3f3ff',
   copper: '#d98c5f',
 };
+// 周期内の位置（0〜1）。phaseはラジアンで指定する。
+function cycle(m: Motion, time: number) {
+  const s = time / m.period + (m.phase ?? 0) / (Math.PI * 2);
+  return s - Math.floor(s);
+}
+/** 静止区間を持つ動きで、揺れ始めるまでの残り秒数。揺れている間は0。 */
+export function restRemaining(p: Platform, time: number) {
+  const m = p.motion;
+  if (!m?.dwell) return 0;
+  return Math.max(0, (m.dwell - cycle(m, time)) * m.period);
+}
+function dwellWave(m: Motion, time: number) {
+  const s = cycle(m, time),
+    dwell = m.dwell!;
+  if (s < dwell) return 0;
+  // 片側へ振れて戻る。振れる向きは周期ごとに左右交互。始点と終点で速度0になり、静止から滑らかに動き出す。
+  const u = (s - dwell) / (1 - dwell),
+    side = Math.floor(time / m.period + (m.phase ?? 0) / (Math.PI * 2)) % 2 ? -1 : 1;
+  return ((1 - Math.cos(Math.PI * 2 * u)) / 2) * side;
+}
 export function platformPose(p: Platform, time: number): { position: Vec; angle: number } {
   const m = p.motion,
     wave = m
-      ? (m.stops
-          ? Math.max(
-              -1,
-              Math.min(1, -Math.cos((time * Math.PI * 2) / m.period + (m.phase ?? 0)) * 1.8),
-            )
-          : Math.sin((time * Math.PI * 2) / m.period + (m.phase ?? 0))) * m.amplitude
+      ? (m.dwell
+          ? dwellWave(m, time)
+          : m.stops
+            ? Math.max(
+                -1,
+                Math.min(1, -Math.cos((time * Math.PI * 2) / m.period + (m.phase ?? 0)) * 1.8),
+              )
+            : Math.sin((time * Math.PI * 2) / m.period + (m.phase ?? 0))) * m.amplitude
       : 0;
   return {
     position: {
@@ -123,9 +159,52 @@ export function onPlatform(q: Point, p: Platform, margin = 0): boolean {
     [0, -margin],
   ].every(([x, z]) => surfaceHeight({ x: q.x + x, z: q.z + z }, p) !== undefined);
 }
+// 足場の平面範囲を8m四方の格子に登録し、近くの足場だけを調べる。
+// 各マスは元の配列順を保つので、find() が選ぶ足場は全件走査と同じになる。
+const cellSize = 8;
+const grids = new WeakMap<Platform[], Map<number, Platform[]>>();
+const cellKey = (ix: number, iz: number) => (ix + 32768) * 65536 + (iz + 32768);
+function grid(platforms: Platform[]) {
+  let cells = grids.get(platforms);
+  if (cells) return cells;
+  cells = new Map();
+  for (const p of platforms) {
+    let minX: number, maxX: number, minZ: number, maxZ: number;
+    if (p.vertices) {
+      minX = Math.min(...p.vertices.map((v) => v.x));
+      maxX = Math.max(...p.vertices.map((v) => v.x));
+      minZ = Math.min(...p.vertices.map((v) => v.z));
+      maxZ = Math.max(...p.vertices.map((v) => v.z));
+    } else {
+      // 回転しても収まる外接円。横移動する足場は振れ幅も含める。
+      const r = Math.hypot(p.w, p.d) / 2,
+        slide = p.motion?.kind === 'slide' ? Math.abs(p.motion.amplitude) : 0;
+      minX = p.x - r - slide;
+      maxX = p.x + r + slide;
+      minZ = p.z - r;
+      maxZ = p.z + r;
+    }
+    for (let ix = Math.floor(minX / cellSize); ix <= Math.floor(maxX / cellSize); ix++)
+      for (let iz = Math.floor(minZ / cellSize); iz <= Math.floor(maxZ / cellSize); iz++) {
+        const key = cellKey(ix, iz);
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key)!.push(p);
+      }
+  }
+  grids.set(platforms, cells);
+  return cells;
+}
+const none: Platform[] = [];
+/** 平面位置 q の真上・真下にあり得る足場（元の順序）。 */
+export function platformsNear(course: Course, q: Point): Platform[] {
+  return (
+    grid(course.platforms).get(cellKey(Math.floor(q.x / cellSize), Math.floor(q.z / cellSize))) ??
+    none
+  );
+}
 export function safeAt(q: Vec, course: Course): boolean {
   const supports = (point: Point) =>
-    course.platforms.some(
+    platformsNear(course, point).some(
       (p) => p.safe && !p.motion && Math.abs((surfaceHeight(point, p) ?? -999) - q.y + 0.52) < 0.2,
     );
   return (
@@ -166,17 +245,23 @@ function ribbon(
       { x: p.x - nx, y: p.y - tilt, z: p.z - nz },
     ];
   });
-  return points.slice(1).map((p, i) => ({
-    id: prefix + '-' + i,
-    x: (p.x + points[i].x) / 2,
-    y: (p.y + points[i].y) / 2,
-    z: (p.z + points[i].z) / 2,
-    w: width,
-    d: 3,
-    safe: true,
-    surface,
-    vertices: [edges[i][0], edges[i + 1][0], edges[i + 1][1], edges[i][1]],
-  }));
+  let along = 0;
+  return points.slice(1).map((p, i) => {
+    const start = along;
+    along += Math.hypot(p.x - points[i].x, p.z - points[i].z);
+    return {
+      id: prefix + '-' + i,
+      x: (p.x + points[i].x) / 2,
+      y: (p.y + points[i].y) / 2,
+      z: (p.z + points[i].z) / 2,
+      w: width,
+      d: 3,
+      safe: true,
+      surface,
+      vertices: [edges[i][0], edges[i + 1][0], edges[i + 1][1], edges[i][1]],
+      lane: { outer: [true, true], along: [start, along], across: [0, 1], width },
+    };
+  });
 }
 function sample(controls: Vec[]): Vec[] {
   const curve = new CatmullRomCurve3(

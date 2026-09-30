@@ -2,15 +2,20 @@ import './style.css';
 import { courses } from './courses';
 import { Input } from './input';
 import { initPhysics, Physics, type GameEvent } from './physics';
-import { formatTime, improve, type Phase } from './round';
+import { formatTime, improve, type Phase, type RecordValue } from './round';
 import { Save } from './storage';
 import { bgmTracks, Sounds } from './audio';
 import { View } from './view';
 import { tuning, characterConfig } from './config';
+import { RouteProgress } from './progress';
 
 const ui = document.querySelector<HTMLElement>('#ui')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#world')!;
 const toastElement = document.querySelector<HTMLElement>('#toast')!;
+const fadeElement = document.querySelector<HTMLElement>('#fade')!;
+const splashElement = document.querySelector<HTMLElement>('#splash')!;
+const boostElement = document.querySelector<HTMLElement>('#boost')!;
+let boostShown = '';
 const input = new Input(document.querySelector<HTMLElement>('#joystick')!);
 const sound = new Sounds();
 const save = new Save({
@@ -26,11 +31,16 @@ let beforePause: Phase = 'playing',
   previousFrame = 0;
 let toastUntil = 0,
   hudTime: HTMLElement | null = null,
-  hudTarts: HTMLElement | null = null;
+  hudTarts: HTMLElement | null = null,
+  hudProgress: HTMLElement | null = null;
 let resultTimeBest = false,
-  resultTartBest = false;
+  resultTartBest = false,
+  previousRecord: RecordValue | undefined;
 let pageVersion = 0;
 let lastSection = '';
+let progress: RouteProgress;
+let celebration: number | undefined;
+const lastToast: Partial<Record<GameEvent, number>> = {};
 function syncSettings() {
   input.mode = save.settings.mode;
   input.sensitivity = save.settings.sensitivity;
@@ -48,23 +58,50 @@ function toast(message: string, duration = 2.2) {
 function bind(id: string, handler: () => void) {
   document.getElementById(id)?.addEventListener('click', handler);
 }
+// 画面中央の大きな文字（GO!・GOAL!など）。アニメーションを毎回最初から再生する。
+function splash(text: string, tone = '') {
+  splashElement.textContent = text;
+  splashElement.className = '';
+  void splashElement.offsetWidth;
+  splashElement.className = 'show ' + tone;
+}
+function bump(element: HTMLElement | null) {
+  const target = element?.parentElement;
+  if (!target) return;
+  target.classList.remove('bump');
+  void target.offsetWidth;
+  target.classList.add('bump');
+}
 function page(content: string, className = '') {
   pageVersion++;
   input.show(false);
   input.clear();
   hudTime = null;
   hudTarts = null;
+  hudProgress = null;
   ui.innerHTML = `<section class="panel ${className}">${content}</section>`;
 }
 function replaceGame(index: number) {
   sound.updateDash(false, 0);
+  sound.updateRolling(false, 0);
   sound.stopBgm();
   lastSection = '';
+  window.clearTimeout(celebration);
+  celebration = undefined;
+  fadeElement.classList.remove('on');
+  splashElement.className = '';
   game?.dispose();
   selected = index;
   accumulator = 0;
   game = new Physics(courses[index], event);
+  progress = new RouteProgress(courses[index]);
   view.build(courses[index]);
+}
+// 同じコースを、準備画面を挟まずにすぐ始め直す。傾き操作ではこの操作で基準を登録し直す。
+function restart() {
+  replaceGame(selected);
+  ready();
+  void start();
 }
 function menu() {
   screenState = 'menu';
@@ -149,7 +186,9 @@ async function start() {
     return;
   }
   game.round.start(now());
+  progress.reset(game.position);
   showPlay();
+  splash('GO!');
   toast('タルトの道をたどって、ゴールへ。');
 }
 function showPlay() {
@@ -157,14 +196,24 @@ function showPlay() {
   accumulator = 0;
   input.clear();
   input.show(true);
-  ui.innerHTML = `<div class="hud"><div class="hud-stats"><div><small>TIME</small><strong id="time">00:00.00</strong></div><div><small>TARTS</small><strong id="tarts">0 / ${game.course.tarts.length}</strong></div></div><button id="pause" class="pause" aria-label="中断と設定">Ⅱ</button></div><div class="course-caption"><span>AREA 0${selected + 1}</span>${game.course.name}</div>`;
+  const ticks = progress
+    .checkpoints()
+    .map(
+      (ratio, i) =>
+        `<i class="tick ${i <= game.round.checkpoint ? 'passed' : ''}" style="left:${(ratio * 100).toFixed(1)}%"></i>`,
+    )
+    .join('');
+  ui.innerHTML = `<div class="hud"><div class="hud-stats"><div><small>TIME</small><strong id="time">00:00.00</strong></div><div><small>TARTS</small><strong id="tarts">${game.round.collected.size} / ${game.course.tarts.length}</strong></div><div class="progress" aria-hidden="true"><b id="progress" style="width:${(progress.ratio * 100).toFixed(1)}%"></b>${ticks}<i class="tick goal" style="left:100%"></i></div></div><button id="pause" class="pause" aria-label="中断と設定">Ⅱ</button></div><div class="course-caption"><span>AREA 0${selected + 1}</span>${game.course.name}</div>`;
   hudTime = document.getElementById('time');
   hudTarts = document.getElementById('tarts');
+  hudProgress = document.getElementById('progress');
   bind('pause', () => pause());
 }
 function pause(message = '') {
   if (!['playing', 'falling'].includes(game?.round.phase)) return;
+  // 背景へ移ると描画ループが止まるため、持続音はここで明示的に消す。
   sound.updateDash(false, 0);
+  sound.updateRolling(false, 0);
   sound.pauseBgm();
   beforePause = game.round.phase;
   game.round.phase = 'paused';
@@ -225,54 +274,116 @@ function pausePage(message = '') {
       }
     });
   });
-  bind('restart', () => {
-    replaceGame(selected);
-    ready();
-  });
+  bind('restart', restart);
   bind('back', menu);
 }
 function result() {
+  window.clearTimeout(celebration);
+  celebration = undefined;
+  splashElement.className = '';
   screenState = 'result';
   const r = game.round,
-    total = game.course.tarts.length;
+    total = game.course.tarts.length,
+    old = previousRecord,
+    next = (selected + 1) % courses.length;
+  // 記録との比較は別々に表示する。タイムとタルトを合算した評価はしない。
+  const timeNote = resultTimeBest
+    ? old
+      ? `自己ベスト更新！ −${(old.time - r.finishedTime).toFixed(2)}秒`
+      : '自己ベスト更新！'
+    : `ベスト ${formatTime(old!.time)}（+${(r.finishedTime - old!.time).toFixed(2)}秒）`;
+  const tartNote = resultTartBest
+    ? old || r.collected.size
+      ? '最多タルト更新！'
+      : '初めての記録'
+    : `最多 ${old!.tarts} / ${total}`;
   page(
     `<span class="eyebrow">A BEAUTIFUL LANDING</span><div class="result-seal" aria-hidden="true">✦</div><h2>空の旅、クリア！</h2><p>${game.course.name}</p>
-    <div class="result-grid"><div><small>YOUR TIME</small><strong>${formatTime(r.finishedTime)}</strong><em>${resultTimeBest ? '自己ベスト更新！' : '今回のタイム'}</em></div><div><small>YOUR TARTS</small><strong>${r.collected.size} <small style="display:inline">/ ${total}</small></strong><em>${resultTartBest ? '最多タルト更新！' : '今回の収集数'}</em></div></div>
-    ${r.collected.size === total ? '<div class="pill">✦ 全タルト収集、おめでとう！</div>' : '<p>また違う道で、タルトを探してみよう。</p>'}
-    <div class="actions"><button id="restart" class="button primary">もう一度、この空へ →</button><button id="back" class="button">エリア選択へ戻る</button></div>`,
+    <div class="result-grid"><div class="${resultTimeBest ? 'best' : ''}"><small>YOUR TIME</small><strong>${formatTime(r.finishedTime)}</strong><em>${timeNote}</em></div><div class="${resultTartBest && r.collected.size ? 'best' : ''}"><small>YOUR TARTS</small><strong>${r.collected.size} <small style="display:inline">/ ${total}</small></strong><em>${tartNote}</em></div></div>
+    ${r.collected.size === total ? '<div class="pill">✦ 全タルト収集、おめでとう！</div>' : `<p>残り ${total - r.collected.size} 個。また違う道で、タルトを探してみよう。</p>`}
+    <div class="actions"><button id="restart" class="button primary">もう一度、この空へ →</button><button id="next" class="button">次のコース：${courses[next].name} →</button><button id="back" class="text-button">エリア選択へ戻る</button></div>`,
     'result',
   );
-  bind('restart', () => {
-    replaceGame(selected);
+  bind('restart', restart);
+  bind('next', () => {
+    replaceGame(next);
     ready();
   });
   bind('back', menu);
 }
+function skipCelebration() {
+  if (celebration !== undefined && screenState === 'play' && game.round.phase === 'finished')
+    result();
+}
 function event(type: GameEvent) {
-  sound.play(type);
-  if (type === 'dash') view.dash.fire(game.position, game.ball.linvel(), game.lastPadId);
-  view.effect(type);
+  // 着地は落下の速さに応じて音と土ぼこりの強さを変える。
+  const strength = type === 'land' ? Math.min(1, 0.3 + (game.landingSpeed - 4) / 12) : 1;
+  sound.play(type, strength);
+  if (type === 'dash') {
+    view.dash.fire(game.position, game.ball.linvel(), game.lastPadId);
+    boostElement.classList.remove('flash');
+    void boostElement.offsetWidth;
+    boostElement.classList.add('flash');
+  }
+  view.effect(type, strength);
   const text: Partial<Record<GameEvent, string>> = {
-    tart: 'タルト +1',
     dash: '追い風に乗って！',
     jump: '空へジャンプ！',
-    checkpoint: 'チェックポイントを通過',
     fall: '大丈夫。少し前から、もう一度。',
     recover: 'ここから、もう一度。',
   };
-  if (text[type]) toast(text[type]!);
+  // 連続するダッシュ・ジャンプで案内が埋もれないよう、同じ文言は5秒に1回まで。
+  const at = performance.now();
+  if (
+    text[type] &&
+    at - (lastToast[type] ?? -Infinity) > (type === 'dash' || type === 'jump' ? 5000 : 0)
+  ) {
+    lastToast[type] = at;
+    toast(text[type]!);
+  }
+  if (type === 'tart') {
+    // タルトは頻繁に取るので、案内の文字は出さずにHUDの数字を弾ませる。
+    bump(hudTarts);
+    if (game.round.collected.size === game.course.tarts.length) {
+      toast('✦ タルトをすべて集めた！', 3);
+      sound.celebrate();
+      view.effect('complete');
+    }
+  }
+  if (type === 'checkpoint') {
+    const index = game.round.checkpoint;
+    toast(
+      `チェックポイント ${index + 1}/${game.course.checkpoints.length} ・ ${formatTime(game.round.elapsed(now()))}`,
+    );
+    document.querySelectorAll('.progress .tick')[index]?.classList.add('passed');
+  }
+  // 落下中は画面を白く包み、復帰地点への瞬間移動を見せない。
+  if (type === 'fall') fadeElement.classList.add('on');
   if (type === 'recover') {
     view.snap(game.position);
+    progress.reset(game.position);
     input.clear();
+    fadeElement.classList.remove('on');
   }
   if (type === 'goal') {
     const old = save.records[game.course.id],
       r = game.round;
+    previousRecord = old;
     resultTimeBest = !old || r.finishedTime < old.time;
     resultTartBest = !old || r.collected.size > old.tarts;
     save.records[game.course.id] = improve(old, r.finishedTime, r.collected.size);
     persist();
-    result();
+    // 記録は確定済み。少しだけ祝ってから結果を出す。画面をタップすると飛ばせる。
+    input.show(false);
+    input.clear();
+    document.getElementById('pause')?.setAttribute('hidden', '');
+    if (hudProgress) hudProgress.style.width = '100%';
+    splash(resultTimeBest ? 'GOAL! ✦' : 'GOAL!', 'goal');
+    sound.duck(2.4);
+    const finished = game;
+    celebration = window.setTimeout(() => {
+      if (game === finished && screenState === 'play') result();
+    }, 2300);
   }
 }
 function frame(timestamp: number) {
@@ -293,10 +404,21 @@ function frame(timestamp: number) {
     if (hudTime) hudTime.textContent = formatTime(game.round.elapsed(now()));
     if (hudTarts)
       hudTarts.textContent = `${game.round.collected.size} / ${game.course.tarts.length}`;
+    if (hudProgress && game.round.phase === 'playing')
+      hudProgress.style.width = `${(progress.update(game.position) * 100).toFixed(1)}%`;
     view.draw(game, dt, screenState === 'menu' || screenState === 'ready');
-    sound.updateDash(
-      game.dashActive && game.round.phase === 'playing',
-      Math.hypot(game.ball.linvel().x, game.ball.linvel().z),
+    // ダッシュ中は画面の縁を水色に光らせる（値が変わったときだけ書き換える）。
+    const boost = (screenState === 'play' ? view.dash.intensity : 0).toFixed(2);
+    if (boost !== boostShown) boostElement.style.opacity = boostShown = boost;
+    const velocity = game.ball.linvel(),
+      speed = Math.hypot(velocity.x, velocity.z);
+    sound.updateDash(game.dashActive && game.round.phase === 'playing', speed);
+    sound.updateRolling(
+      screenState === 'play' &&
+        (game.round.phase === 'playing' || game.round.phase === 'finished') &&
+        game.grounded,
+      speed,
+      game.surface === 'ice',
     );
     if (game.round.phase === 'playing') {
       const section = game.course.sections?.find(
@@ -321,11 +443,19 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => pause());
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') pause();
+  if (e.key === 'Enter' || e.key === ' ') skipCelebration();
 });
+canvas.addEventListener('pointerdown', skipCelebration);
 const sideways = matchMedia('(orientation: landscape) and (pointer: coarse)');
 sideways.addEventListener('change', (e) => {
   input.clear();
   if (e.matches) pause();
+});
+// 画面回転の change 通知が届かないブラウザーもあるため、サイズ変更でも確かめる。
+window.addEventListener('resize', () => {
+  if (!sideways.matches || screenState !== 'play') return;
+  input.clear();
+  pause();
 });
 canvas.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
@@ -353,6 +483,7 @@ async function boot() {
             records: save.records,
             memory: view.renderer.info.memory,
             calls: view.renderer.info.render.calls,
+            triangles: view.renderer.info.render.triangles,
             simulationTime: game.simulationTime,
             bgmVolume: sound.bgmOutputVolume,
             dash: { active: game.dashActive, fov: view.camera.fov, ...view.dash.diagnostics },
@@ -372,6 +503,13 @@ async function boot() {
             game.round.history = [];
           },
           pause: () => pause(),
+          // 描画の重さを部品ごとに調べるための切り替え（開発サーバーのみ）
+          layers: () => view.scene.children.map((o, i) => `${i}:${o.type}:${o.children.length}`),
+          hide: (path: number[], visible = false) => {
+            let o: import('three').Object3D = view.scene;
+            for (const i of path) o = o.children[i];
+            o.visible = visible;
+          },
         },
       });
     }

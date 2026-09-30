@@ -1,5 +1,11 @@
 import { beforeAll, expect, it } from 'vitest';
-import { courses, platformPose, surfaceHeight } from '../../src/courses';
+import {
+  courses,
+  platformPose,
+  platformsNear,
+  restRemaining,
+  surfaceHeight,
+} from '../../src/courses';
 import { initPhysics, Physics } from '../../src/physics';
 import { tuning } from '../../src/config';
 beforeAll(initPhysics);
@@ -95,11 +101,107 @@ it('crystal lifts physically carry a standing ball from the lower dock to the up
 
 it('rotating bridges change their physical footprint and have no fixed bypass below', () => {
   const course = courses[5],
-    bridge = course.platforms.find((p) => p.motion)!;
+    bridge = course.platforms.find((p) => p.motion)!,
+    m = bridge.motion!;
   const q = { x: bridge.x, z: bridge.z + bridge.d / 2 - 3 };
   expect(surfaceHeight(q, bridge, 0)).toBeDefined();
-  expect(surfaceHeight(q, bridge, bridge.motion!.period / 4)).toBeUndefined();
+  // 静止区間の後、振れ幅が最大付近になる時刻。
+  const swing = m.period * (m.dwell! + (1 - m.dwell!) * 0.3);
+  expect(surfaceHeight(q, bridge, swing)).toBeUndefined();
   expect(course.platforms.some((p) => p !== bridge && surfaceHeight(q, p) !== undefined)).toBe(
     false,
   );
+});
+
+it('rotating bridges rest connected for a readable window, then swing smoothly', () => {
+  for (const course of [courses[2], courses[5]])
+    for (const bridge of course.platforms.filter((p) => p.motion?.kind === 'rotate')) {
+      const m = bridge.motion!;
+      expect(m.dwell! * m.period, course.name + bridge.id).toBeGreaterThanOrEqual(3);
+      expect(bridge.recoverySafe).toBe(false);
+      let docked = 0,
+        previous = platformPose(bridge, 0).angle;
+      for (let t = 0; t < m.period; t += 0.01) {
+        const angle = platformPose(bridge, t).angle;
+        if (Math.abs(angle - (bridge.angle ?? 0)) < 1e-9) docked += 0.01;
+        // 急に跳ねる動きをしない（最大角速度の上限）。
+        expect(Math.abs(angle - previous)).toBeLessThan(0.02);
+        previous = angle;
+      }
+      expect(docked).toBeCloseTo(m.dwell! * m.period, 0);
+      expect(restRemaining(bridge, 0.001)).toBeGreaterThan(0);
+    }
+});
+
+it('the platform grid finds exactly the same supports as scanning every platform', () => {
+  for (const course of courses)
+    for (let i = 0; i < course.route.length; i += 3)
+      for (const [dx, dz, t] of [
+        [0, 0, 0],
+        [3.7, -1.2, 2.5],
+        [-6.1, 4.4, 5.3],
+        [9.5, 9.5, 7.9],
+      ]) {
+        const q = { x: course.route[i].x + dx, z: course.route[i].z + dz };
+        const hits = (list: typeof course.platforms) =>
+          list.filter((p) => surfaceHeight(q, p, t) !== undefined).map((p) => p.id);
+        expect(hits(platformsNear(course, q)), course.name).toEqual(hits(course.platforms));
+      }
+});
+
+it('every course starts on an island with ground behind and beside the ball', () => {
+  for (const course of courses)
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2,
+        q = { x: course.start.x + Math.cos(a) * 3, z: course.start.z + Math.sin(a) * 3 };
+      expect(
+        course.platforms.some((p) => {
+          const y = surfaceHeight(q, p);
+          return y !== undefined && Math.abs(y - (course.start.y - 0.6)) < 0.1;
+        }),
+        `${course.name} ${k}`,
+      ).toBe(true);
+    }
+});
+
+it('roads arriving at an island reach its height, so the rim never becomes a wall', () => {
+  for (const course of courses)
+    for (const deck of course.platforms.filter((p) => p.shape && !p.motion)) {
+      const r = (Math.min(deck.w, deck.d) / 2) * (deck.shape === 'hex' ? 0.86 : 1) + 0.05;
+      course.route.forEach((p, i) => {
+        if (Math.hypot(p.x - deck.x, p.z - deck.z) > 1 || Math.abs(p.y - deck.y) > 0.5) return;
+        // 島へ入ってくる側の、縁のすぐ外の路面。下り（島から降りる側）は段差でも問題ない。
+        const before = course.route
+          .slice(0, i)
+          .reverse()
+          .find((q) => Math.hypot(q.x - deck.x, q.z - deck.z) > r + 0.5);
+        if (!before) return;
+        const d = Math.hypot(before.x - deck.x, before.z - deck.z),
+          q = {
+            x: deck.x + ((before.x - deck.x) / d) * r,
+            z: deck.z + ((before.z - deck.z) / d) * r,
+          };
+        const heights = course.platforms
+          .filter((road) => road.vertices)
+          .map((road) => surfaceHeight(q, road))
+          .filter((y): y is number => y !== undefined);
+        if (heights.length)
+          expect(Math.max(...heights), `${course.name} ${deck.id}`).toBeGreaterThan(deck.y - 0.1);
+      });
+    }
+});
+
+it('every road quad carries lane data so the renderer can align textures and curbs', () => {
+  for (const course of courses)
+    for (const p of course.platforms.filter((p) => p.vertices)) {
+      const lane = p.lane!;
+      expect(lane, `${course.name} ${p.id}`).toBeDefined();
+      expect(lane.along[1]).toBeGreaterThan(lane.along[0]);
+      expect(lane.across[0]).toBeGreaterThanOrEqual(0);
+      expect(lane.across[1]).toBeLessThanOrEqual(1);
+      expect(lane.across[1]).toBeGreaterThan(lane.across[0]);
+      // 外縁は道全体の端（0 か 1）にだけある。
+      if (lane.outer[0]) expect(lane.across[0]).toBe(0);
+      if (lane.outer[1]) expect(lane.across[1]).toBe(1);
+    }
 });

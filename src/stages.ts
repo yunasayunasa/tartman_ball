@@ -1,5 +1,5 @@
 import { CatmullRomCurve3, Vector3 } from 'three';
-import type { Course, Vec, Surface, Platform, Motion } from './courses';
+import type { Course, Vec, Surface, Platform, Motion, Lane } from './courses';
 
 const point = (x: number, z: number, y = 0): Vec => ({ x, y, z });
 const direction = (a: Vec, b: Vec) => {
@@ -77,12 +77,21 @@ class Stage {
         z: p.z + ((d.x * width) / 2) * t,
       }));
     });
+    let along = 0;
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i],
         b = points[i + 1],
-        d = direction(a, b);
+        d = direction(a, b),
+        start = along;
+      along += Math.hypot(b.x - a.x, b.z - a.z);
       for (let j = 0; j < cross.length - 1; j++) {
         const vertices = [edges[i][j], edges[i + 1][j], edges[i + 1][j + 1], edges[i][j + 1]];
+        const lane: Lane = {
+          outer: [j === 0, j === cross.length - 2],
+          along: [start, along],
+          across: [(cross[j] + 1) / 2, (cross[j + 1] + 1) / 2],
+          width,
+        };
         this.course.platforms.push({
           id: this.id(options.trough ? 'trough' : 'road'),
           x: (a.x + b.x) / 2,
@@ -93,6 +102,7 @@ class Stage {
           safe: true,
           surface,
           vertices,
+          lane,
           ...(options.conveyor
             ? { effect: { kind: 'conveyor' as const, x: d.x, z: d.z, strength: 5 } }
             : {}),
@@ -133,7 +143,8 @@ class Stage {
       d: depth,
       surface,
       safe: !motion,
-      recoverySafe: true,
+      // 回転橋の上は、戻した直後に振れて再落下しやすい。手前の島へ戻す。
+      recoverySafe: motion?.kind !== 'rotate',
       shape,
       motion,
       angle,
@@ -182,6 +193,9 @@ class Stage {
   }
   finish(p: Vec, surface: Surface) {
     this.deck(p, 14, 14, surface, 'disc');
+    // スタートにも島を置く。道の端から始まると、出だしで少し後ろへ傾けただけで落ちる。
+    const start = this.course.route[0];
+    this.deck(start, 12, 12, this.course.platforms[0].surface ?? surface, 'disc');
     this.course.goal = { ...p };
     this.course.tarts = this.course.tarts.filter(
       (t) => !this.course.pads.some((p) => Math.hypot(p.x - t.x, p.z - t.z) < 3),
@@ -234,9 +248,13 @@ function desert() {
   s.bounce(jump, landing);
   s.deck(landing, 12, 12, 'stone', 'disc');
   s.route([jump, landing]);
-  s.road([landing, point(-40, -430, 0), point(0, -480, -5), point(40, -525, 0)], 16, 'sand', {
-    trough: 2.6,
-  });
+  // 谷から上り切ってからゴールの島へ入る。島の手前で路面が低いと縁が壁になって止まる。
+  s.road(
+    [landing, point(-40, -430, 0), point(0, -480, -5), point(26, -510, 0), point(40, -525, 0)],
+    16,
+    'sand',
+    { trough: 2.6 },
+  );
   return s.finish(point(40, -525, 0), 'stone');
 }
 
@@ -276,10 +294,15 @@ function candy() {
       const bridge = point(cp.x, cp.z - 19, cp.y),
         dock = point(cp.x, cp.z - 38, cp.y);
       s.road([cp, point(cp.x, cp.z - 8, cp.y)], 6, 'cookie');
-      s.deck(bridge, 5, 26, 'candy', undefined, { kind: 'rotate', amplitude: 0.65, period: 7 });
+      s.deck(bridge, 5, 26, 'candy', undefined, {
+        kind: 'rotate',
+        amplitude: 0.65,
+        period: 8,
+        dwell: 0.55,
+      });
       s.deck(dock, 12, 12, 'cookie', 'disc');
       s.route([point(cp.x, cp.z - 8, cp.y), bridge, dock]);
-      s.section(cp, 'WAFER TURN', '橋がつながるのを待とう');
+      s.section(cp, 'WAFER TURN', '橋が緑に光ったら、一気に渡ろう');
       anchor = dock;
     } else anchor = cp;
   }
@@ -402,7 +425,7 @@ function windmill() {
   for (let act = 0; act < 3; act++) {
     const entry = point(anchor.x, anchor.z - 30, anchor.y);
     s.road([anchor, entry], 9, 'wood');
-    s.section(entry, 'TURNING BRIDGES', '橋の向きがそろったら渡ろう');
+    s.section(entry, 'TURNING BRIDGES', '緑に光る間に渡ろう。点滅は動く合図');
     let dock = entry;
     s.deck(dock, 12, 12, 'grass', 'disc');
     for (let j = 0; j < 3; j++) {
@@ -415,7 +438,7 @@ function windmill() {
         Math.hypot(next.x - dock.x, next.z - dock.z) - 9,
         'copper',
         undefined,
-        { kind: 'rotate', amplitude: 1.05, period: 7 + j, phase: j * 0.5 },
+        { kind: 'rotate', amplitude: 1.05, period: 9 - j, phase: j * 0.5, dwell: 0.45 },
         Math.atan2(d.x, d.z),
       );
       s.deck(next, 12, 12, 'grass', 'disc');

@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 test('本番ビルドをリポジトリ配下から配信し、外部依存なしで起動・収集する', async ({ page }) => {
+  // 6コースを1つの試験で順に開くため、ソフトウェア描画の環境でも収まる時間を取る。
+  test.setTimeout(120000);
   const failures: string[] = [],
     external: string[] = [],
     errors: string[] = [];

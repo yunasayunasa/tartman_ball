@@ -4,13 +4,16 @@ import {
   type Course,
   type Vec,
   type Platform,
+  type Surface,
   platformPose,
+  platformsNear,
   surfaceHeight,
   safeAt,
 } from './courses';
 import type { InputVector } from './input';
 import { Round } from './round';
-export type GameEvent = 'tart' | 'dash' | 'jump' | 'checkpoint' | 'fall' | 'recover' | 'goal';
+export type GameEvent =
+  'tart' | 'dash' | 'jump' | 'land' | 'checkpoint' | 'fall' | 'recover' | 'goal';
 export class Physics {
   world: RAPIER.World;
   ball: RAPIER.RigidBody;
@@ -24,7 +27,13 @@ export class Physics {
   private boostLimit = 0;
   private boostDirection = { x: 0, z: 0 };
   lastPadId = '';
+  /** 接地している面の素材。転がり音に使う。 */
+  surface?: Surface;
+  /** 直前の着地で受けた落下速度（m/s）。着地演出の強さに使う。 */
+  landingSpeed = 0;
   simulationTime = 0;
+  private airTime = 0;
+  private fallSpeed = 0;
   private moving: { platform: Platform; body: RAPIER.RigidBody }[] = [];
   private floorY = 0;
   constructor(
@@ -33,15 +42,38 @@ export class Physics {
   ) {
     this.world = new RAPIER.World({ x: 0, y: tuning.gravity, z: 0 });
     this.world.timestep = tuning.step;
+    // 路面は摩擦ごとに1枚の三角形メッシュへまとめる。継ぎ目の段差判定で球が跳ねないよう、
+    // 隣接三角形の法線を考慮する FIX_INTERNAL_EDGES を使う。
+    const surfaces = new Map<number, number[]>();
+    const addTriangle = (friction: number, ...corners: Vec[]) => {
+      if (!surfaces.has(friction)) surfaces.set(friction, []);
+      surfaces.get(friction)!.push(...corners.flatMap((v) => [v.x, v.y, v.z]));
+    };
     for (const p of course.platforms) {
+      const friction = p.surface === 'ice' ? 0.06 : 0.35;
       if (p.vertices) {
-        const coords = new Float32Array(p.vertices.flatMap((v) => [v.x, v.y, v.z]));
-        this.world.createCollider(
-          RAPIER.ColliderDesc.trimesh(coords, new Uint32Array([0, 1, 2, 0, 2, 3])).setFriction(
-            p.surface === 'ice' ? 0.06 : 0.35,
-          ),
-        );
+        const [a, b, c, d] = p.vertices;
+        addTriangle(friction, a, b, c);
+        addTriangle(friction, a, c, d);
         continue;
+      }
+      // 固定の島は、路面と同じ高さの上面をメッシュへ加え、円柱の縁は少し下げる。
+      // 路面から島へ乗り移るときに縁へ当たって跳ねない。
+      const deck = !!p.shape && !p.motion;
+      if (deck) {
+        const sides = p.shape === 'hex' ? 6 : 24,
+          angle = p.angle ?? 0;
+        const rim = Array.from({ length: sides }, (_, i) => {
+          const a = (i / sides) * Math.PI * 2,
+            x = (Math.cos(a) * p.w) / 2,
+            z = (Math.sin(a) * p.d) / 2;
+          return {
+            x: p.x + x * Math.cos(angle) + z * Math.sin(angle),
+            y: p.y,
+            z: p.z - x * Math.sin(angle) + z * Math.cos(angle),
+          };
+        });
+        rim.forEach((v, i) => addTriangle(friction, p, v, rim[(i + 1) % sides]));
       }
       const pose = platformPose(p, 0);
       const body = p.motion
@@ -71,7 +103,11 @@ export class Physics {
               )!
             : RAPIER.ColliderDesc.cuboid(p.w / 2, 0.5, p.d / 2)
         )
-          .setTranslation(body ? 0 : p.x, body ? -0.5 : p.y - 0.5, body ? 0 : p.z)
+          .setTranslation(
+            body ? 0 : p.x,
+            body ? -0.5 : p.y - 0.5 - (deck ? 0.04 : 0),
+            body ? 0 : p.z,
+          )
           .setRotation({
             x: 0,
             y: body ? 0 : Math.sin((p.angle ?? 0) / 2),
@@ -81,6 +117,26 @@ export class Physics {
           .setFriction(p.surface === 'ice' ? 0.06 : 0.35)
           .setRestitution(0),
         body,
+      );
+    }
+    for (const [friction, coords] of surfaces) {
+      const triangles = coords.length / 9,
+        indices = new Uint32Array(triangles * 3);
+      for (let t = 0; t < triangles; t++) {
+        // 生成元によって巻き順が異なるため、すべて上向きの面にそろえる。
+        const at = (i: number, axis: number) => coords[t * 9 + i * 3 + axis];
+        const up =
+          (at(1, 2) - at(0, 2)) * (at(2, 0) - at(0, 0)) -
+            (at(1, 0) - at(0, 0)) * (at(2, 2) - at(0, 2)) >=
+          0;
+        indices.set(up ? [t * 3, t * 3 + 1, t * 3 + 2] : [t * 3, t * 3 + 2, t * 3 + 1], t * 3);
+      }
+      this.world.createCollider(
+        RAPIER.ColliderDesc.trimesh(
+          new Float32Array(coords),
+          indices,
+          RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+        ).setFriction(friction),
       );
     }
     this.ball = this.world.createRigidBody(
@@ -145,18 +201,7 @@ export class Physics {
     if (this.recoveryPoint(position, support.id, local))
       this.round.remember(position, now, support.id, local);
   }
-  step(input: InputVector, now: number) {
-    const r = this.round;
-    if (r.phase === 'falling') {
-      if (now >= this.recoveryAt) {
-        this.teleport(r.recover(now, (p, id, local) => this.recoveryPoint(p, id, local)));
-        this.guardUntil = now + tuning.recoveryGuard;
-        r.phase = 'playing';
-        this.event('recover');
-      }
-      return;
-    }
-    if (r.phase !== 'playing') return;
+  private moveMechanisms() {
     this.simulationTime += tuning.step;
     for (const { platform, body } of this.moving) {
       const pose = platformPose(platform, this.simulationTime);
@@ -168,13 +213,55 @@ export class Physics {
         w: Math.cos(pose.angle / 2),
       });
     }
+  }
+  step(input: InputVector, now: number) {
+    const r = this.round;
+    if (r.phase === 'falling') {
+      if (now >= this.recoveryAt) {
+        this.teleport(r.recover(now, (p, id, local) => this.recoveryPoint(p, id, local)));
+        this.guardUntil = now + tuning.recoveryGuard;
+        r.phase = 'playing';
+        this.event('recover');
+        return;
+      }
+      // 復帰までの短い間も球は落ち続け、仕掛けも動き続ける。空中で止まって見えない。
+      this.ball.resetForces(true);
+      this.moveMechanisms();
+      this.world.step();
+      return;
+    }
+    if (r.phase === 'finished') {
+      // ゴール後は入力を受けず、ゴールの島の上でブレーキをかけて止まる。結果は変わらない。
+      if (this.position.y < this.course.goal.y - 2) return;
+      const v = this.ball.linvel(),
+        brake = Math.exp(-6 * tuning.step);
+      this.ball.resetForces(true);
+      this.ball.setLinvel({ x: v.x * brake, y: v.y, z: v.z * brake }, true);
+      this.moveMechanisms();
+      this.world.step();
+      return;
+    }
+    if (r.phase !== 'playing') return;
+    this.moveMechanisms();
     const before = this.position,
       velocity = this.ball.linvel();
-    const support = this.course.platforms.find((p) => {
+    const support = platformsNear(this.course, before).find((p) => {
       const y = surfaceHeight(before, p, this.simulationTime);
       return y !== undefined && Math.abs(before.y - tuning.radius - y) < 0.18;
     });
     this.grounded = !!support;
+    this.surface = support?.surface;
+    if (!support) {
+      this.airTime += tuning.step;
+      this.fallSpeed = Math.min(this.fallSpeed, velocity.y);
+    } else {
+      if (this.airTime > 0.25 && this.fallSpeed < -4 && now >= this.guardUntil) {
+        this.landingSpeed = -this.fallSpeed;
+        this.event('land');
+      }
+      this.airTime = 0;
+      this.fallSpeed = 0;
+    }
     if (support) this.floorY = surfaceHeight(before, support, this.simulationTime)!;
     this.ball.setLinearDamping(
       this.grounded ? (support?.surface === 'ice' ? 0.2 : tuning.damping) : tuning.airDamping,
@@ -333,7 +420,7 @@ export class Physics {
       r.finish(now)
     )
       this.event('goal');
-    const lowerFloor = this.course.platforms.some((p) => {
+    const lowerFloor = platformsNear(this.course, pos).some((p) => {
       const h = surfaceHeight(pos, p, this.simulationTime);
       return h !== undefined && h < pos.y && h >= pos.y - 18;
     });
@@ -350,6 +437,8 @@ export class Physics {
     this.ball.resetForces(true);
     this.touching.clear();
     this.stable = 0;
+    this.airTime = 0;
+    this.fallSpeed = 0;
     this.boostUntil = 0;
     this.boostLimit = 0;
     this.grounded = false;
