@@ -1,5 +1,5 @@
 import { CatmullRomCurve3, Vector3 } from 'three';
-import type { Course, Vec, Surface, Platform, Motion } from './courses';
+import type { Course, Vec, Surface, Platform, Motion, Lane } from './courses';
 
 const point = (x: number, z: number, y = 0): Vec => ({ x, y, z });
 const direction = (a: Vec, b: Vec) => {
@@ -77,12 +77,21 @@ class Stage {
         z: p.z + ((d.x * width) / 2) * t,
       }));
     });
+    let along = 0;
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i],
         b = points[i + 1],
-        d = direction(a, b);
+        d = direction(a, b),
+        start = along;
+      along += Math.hypot(b.x - a.x, b.z - a.z);
       for (let j = 0; j < cross.length - 1; j++) {
         const vertices = [edges[i][j], edges[i + 1][j], edges[i + 1][j + 1], edges[i][j + 1]];
+        const lane: Lane = {
+          outer: [j === 0, j === cross.length - 2],
+          along: [start, along],
+          across: [(cross[j] + 1) / 2, (cross[j + 1] + 1) / 2],
+          width,
+        };
         this.course.platforms.push({
           id: this.id(options.trough ? 'trough' : 'road'),
           x: (a.x + b.x) / 2,
@@ -93,6 +102,7 @@ class Stage {
           safe: true,
           surface,
           vertices,
+          lane,
           ...(options.conveyor
             ? { effect: { kind: 'conveyor' as const, x: d.x, z: d.z, strength: 5 } }
             : {}),

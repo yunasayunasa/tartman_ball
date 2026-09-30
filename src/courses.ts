@@ -28,6 +28,18 @@ export type Platform = {
   motion?: Motion;
   shape?: 'disc' | 'hex';
   effect?: { kind: 'conveyor' | 'wind'; x: number; z: number; strength: number };
+  /** 描画用: 道の四角形が道全体のどこにあるか。物理は使わない。 */
+  lane?: Lane;
+};
+/**
+ * vertices の [0]→[1] が片側、[3]→[2] が反対側の辺。
+ * outer: その辺が道の外縁か。along: [0]/[1] 行の道なりの距離（m）。across: 両辺の幅方向の位置（0〜1）。
+ */
+export type Lane = {
+  outer: [boolean, boolean];
+  along: [number, number];
+  across: [number, number];
+  width: number;
 };
 export type Pad = {
   id: string;
@@ -233,17 +245,23 @@ function ribbon(
       { x: p.x - nx, y: p.y - tilt, z: p.z - nz },
     ];
   });
-  return points.slice(1).map((p, i) => ({
-    id: prefix + '-' + i,
-    x: (p.x + points[i].x) / 2,
-    y: (p.y + points[i].y) / 2,
-    z: (p.z + points[i].z) / 2,
-    w: width,
-    d: 3,
-    safe: true,
-    surface,
-    vertices: [edges[i][0], edges[i + 1][0], edges[i + 1][1], edges[i][1]],
-  }));
+  let along = 0;
+  return points.slice(1).map((p, i) => {
+    const start = along;
+    along += Math.hypot(p.x - points[i].x, p.z - points[i].z);
+    return {
+      id: prefix + '-' + i,
+      x: (p.x + points[i].x) / 2,
+      y: (p.y + points[i].y) / 2,
+      z: (p.z + points[i].z) / 2,
+      w: width,
+      d: 3,
+      safe: true,
+      surface,
+      vertices: [edges[i][0], edges[i + 1][0], edges[i + 1][1], edges[i][1]],
+      lane: { outer: [true, true], along: [start, along], across: [0, 1], width },
+    };
+  });
 }
 function sample(controls: Vec[]): Vec[] {
   const curve = new CatmullRomCurve3(

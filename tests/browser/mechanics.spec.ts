@@ -38,6 +38,8 @@ test('neon boost animates, leaves a trail, and clears after restart', async ({ p
 });
 
 test('all stages render their main-route mechanic without page errors', async ({ page }, info) => {
+  // 6ステージを1つの試験で順に開くため、ソフトウェア描画の環境でも収まる時間を取る。
+  test.setTimeout(120000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   for (let index = 0; index < 6; index++) {

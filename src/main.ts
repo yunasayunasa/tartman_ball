@@ -14,6 +14,8 @@ const canvas = document.querySelector<HTMLCanvasElement>('#world')!;
 const toastElement = document.querySelector<HTMLElement>('#toast')!;
 const fadeElement = document.querySelector<HTMLElement>('#fade')!;
 const splashElement = document.querySelector<HTMLElement>('#splash')!;
+const boostElement = document.querySelector<HTMLElement>('#boost')!;
+let boostShown = '';
 const input = new Input(document.querySelector<HTMLElement>('#joystick')!);
 const sound = new Sounds();
 const save = new Save({
@@ -317,7 +319,12 @@ function event(type: GameEvent) {
   // 着地は落下の速さに応じて音と土ぼこりの強さを変える。
   const strength = type === 'land' ? Math.min(1, 0.3 + (game.landingSpeed - 4) / 12) : 1;
   sound.play(type, strength);
-  if (type === 'dash') view.dash.fire(game.position, game.ball.linvel(), game.lastPadId);
+  if (type === 'dash') {
+    view.dash.fire(game.position, game.ball.linvel(), game.lastPadId);
+    boostElement.classList.remove('flash');
+    void boostElement.offsetWidth;
+    boostElement.classList.add('flash');
+  }
   view.effect(type, strength);
   const text: Partial<Record<GameEvent, string>> = {
     dash: '追い風に乗って！',
@@ -400,6 +407,9 @@ function frame(timestamp: number) {
     if (hudProgress && game.round.phase === 'playing')
       hudProgress.style.width = `${(progress.update(game.position) * 100).toFixed(1)}%`;
     view.draw(game, dt, screenState === 'menu' || screenState === 'ready');
+    // ダッシュ中は画面の縁を水色に光らせる（値が変わったときだけ書き換える）。
+    const boost = (screenState === 'play' ? view.dash.intensity : 0).toFixed(2);
+    if (boost !== boostShown) boostElement.style.opacity = boostShown = boost;
     const velocity = game.ball.linvel(),
       speed = Math.hypot(velocity.x, velocity.z);
     sound.updateDash(game.dashActive && game.round.phase === 'playing', speed);
@@ -473,6 +483,7 @@ async function boot() {
             records: save.records,
             memory: view.renderer.info.memory,
             calls: view.renderer.info.render.calls,
+            triangles: view.renderer.info.render.triangles,
             simulationTime: game.simulationTime,
             bgmVolume: sound.bgmOutputVolume,
             dash: { active: game.dashActive, fov: view.camera.fov, ...view.dash.diagnostics },
@@ -492,6 +503,13 @@ async function boot() {
             game.round.history = [];
           },
           pause: () => pause(),
+          // 描画の重さを部品ごとに調べるための切り替え（開発サーバーのみ）
+          layers: () => view.scene.children.map((o, i) => `${i}:${o.type}:${o.children.length}`),
+          hide: (path: number[], visible = false) => {
+            let o: import('three').Object3D = view.scene;
+            for (const i of path) o = o.children[i];
+            o.visible = visible;
+          },
         },
       });
     }

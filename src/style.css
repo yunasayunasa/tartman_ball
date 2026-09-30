@@ -549,6 +549,41 @@ p {
   opacity: 1;
   transition: opacity 0.35s ease-in 0.25s;
 }
+#boost {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    ellipse 75% 60% at 50% 60%,
+    transparent 55%,
+    rgba(80, 225, 255, 0.28) 85%,
+    rgba(160, 245, 255, 0.55) 100%
+  );
+}
+#boost::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 50% 62%,
+    rgba(255, 255, 255, 0.75),
+    rgba(120, 235, 255, 0.25) 45%,
+    transparent 75%
+  );
+  opacity: 0;
+}
+#boost.flash::after {
+  animation: boost-flash 0.32s ease-out;
+}
+@keyframes boost-flash {
+  0% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+  }
+}
 #splash {
   position: fixed;
   left: 0;

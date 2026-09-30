@@ -190,3 +190,18 @@ it('roads arriving at an island reach its height, so the rim never becomes a wal
       });
     }
 });
+
+it('every road quad carries lane data so the renderer can align textures and curbs', () => {
+  for (const course of courses)
+    for (const p of course.platforms.filter((p) => p.vertices)) {
+      const lane = p.lane!;
+      expect(lane, `${course.name} ${p.id}`).toBeDefined();
+      expect(lane.along[1]).toBeGreaterThan(lane.along[0]);
+      expect(lane.across[0]).toBeGreaterThanOrEqual(0);
+      expect(lane.across[1]).toBeLessThanOrEqual(1);
+      expect(lane.across[1]).toBeGreaterThan(lane.across[0]);
+      // 外縁は道全体の端（0 か 1）にだけある。
+      if (lane.outer[0]) expect(lane.across[0]).toBe(0);
+      if (lane.outer[1]) expect(lane.across[1]).toBe(1);
+    }
+});

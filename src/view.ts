@@ -1,22 +1,38 @@
 import * as T from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { characterConfig, tuning } from './config';
 import {
   surfaceHeight,
   platformPose,
   platformsNear,
   restRemaining,
-  surfaceColors,
   type Platform,
   type Course,
+  type Pad,
   type Vec,
 } from './courses';
 import { RouteCamera, screenToWorld } from './camera';
 import type { InputVector } from './input';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { roadMaterial } from './materials';
 import type { Physics, GameEvent } from './physics';
 import { DashEffects } from './dash-effects';
+import { palettes, type Palette } from './look/palette';
+import { Sky } from './look/sky';
+import { Ambient } from './look/ambient';
+import { Bursts } from './look/bursts';
+import { Bag } from './look/bag';
+import { buildTerrain } from './look/terrain';
+import { buildDecor } from './look/decor';
+import { beamMaterial, glassMaterial, glowMaterial } from './look/glass';
+import { at, build as model } from './look/models';
+import {
+  checkerTexture,
+  chevronTexture,
+  glowTexture,
+  labelTexture,
+  signTexture,
+  stripTexture,
+} from './look/textures';
 
 export function inPlace(clip: T.AnimationClip, nodes: string[]) {
   const result = clip.clone();
@@ -31,61 +47,95 @@ export function inPlace(clip: T.AnimationClip, nodes: string[]) {
 }
 const material = (color: T.ColorRepresentation, extra: T.MeshStandardMaterialParameters = {}) =>
   new T.MeshStandardMaterial({ color, roughness: 0.8, ...extra });
+const additive = (color: string, opacity: number, map?: T.Texture) =>
+  new T.MeshBasicMaterial({
+    color,
+    map,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    side: T.DoubleSide,
+    blending: T.AdditiveBlending,
+  });
+/** 行列で配置した形状を1つにまとめる（頂点色なしの材質向け）。 */
+function mergePlaced(parts: { geometry: T.BufferGeometry; matrix: T.Matrix4 }[]) {
+  const pieces = parts.map(({ geometry, matrix }) => {
+    const g = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+    geometry.dispose();
+    return g.applyMatrix4(matrix);
+  });
+  const merged = mergeGeometries(pieces)!;
+  pieces.forEach((g) => g.dispose());
+  return merged;
+}
+function sprite(texture: T.Texture) {
+  const m = new T.SpriteMaterial({ map: texture });
+  m.addEventListener('dispose', () => texture.dispose());
+  return new T.Sprite(m);
+}
+/** ルート上で p に近い点の進行方向（水平の角度）。 */
+function headingAt(course: Course, p: Vec) {
+  let best = 0;
+  course.route.forEach((q, i) => {
+    const b = course.route[best];
+    if (Math.hypot(q.x - p.x, q.z - p.z, q.y - p.y) < Math.hypot(b.x - p.x, b.z - p.z, b.y - p.y))
+      best = i;
+  });
+  const a = course.route[Math.max(0, best - 2)],
+    b = course.route[Math.min(course.route.length - 1, best + 2)];
+  return Math.atan2(b.x - a.x, b.z - a.z);
+}
+
 export class View {
   renderer: T.WebGLRenderer;
   scene = new T.Scene();
-  camera = new T.PerspectiveCamera(54, 1, 0.1, 220);
+  camera = new T.PerspectiveCamera(54, 1, 0.1, 420);
   private level = new T.Group();
   private routeCamera = new RouteCamera();
   private activeCourse?: Course;
+  private bag = new Bag();
+  private sky: Sky;
+  private ambient: Ambient;
+  private hemisphere: T.HemisphereLight;
+  private sun: T.DirectionalLight;
+  private decorUpdate?: (time: number) => void;
   private movers: { group: T.Group; platform: Platform; trim: T.MeshStandardMaterial }[] = [];
-  private rotors: T.Group[] = [];
-  private winds: { mesh: T.Mesh; origin: T.Vector3; direction: T.Vector3; phase: number }[] = [];
+  private winds?: {
+    mesh: T.InstancedMesh;
+    items: { origin: T.Vector3; direction: T.Vector3; phase: number }[];
+  };
+  private scrolling: { texture: T.Texture; speed: number }[] = [];
+  private jumpTop?: T.MeshStandardMaterial;
+  private jumpBeams?: T.ShaderMaterial;
   private actor = new T.Group();
   private shell = new T.Group();
   private character = new T.Group();
-  private tarts = new Map<string, T.Group>();
-  private tartInstances: T.InstancedMesh[] = [];
+  private tarts: (Vec & { id: string })[] = [];
+  private tartParts: { mesh: T.InstancedMesh; offset: T.Matrix4 }[] = [];
+  private tartHalo?: T.Points<T.BufferGeometry, T.PointsMaterial>;
   private tartMatrix = new T.Matrix4();
   private checkpoints: T.Mesh[] = [];
+  private banners: T.Sprite[] = [];
+  private signs: T.Sprite[] = [];
+  private goalStar?: T.Object3D;
   private follow = new T.Vector3();
   private mixer?: T.AnimationMixer;
   private run?: T.AnimationAction;
-  private particles: {
-    mesh: T.Mesh;
-    velocity: T.Vector3;
-    life: number;
-    maxLife: number;
-    gravity: number;
-    drag: number;
-    spin?: T.Vector3;
-  }[] = [];
-  private particleGeometry = new T.IcosahedronGeometry(0.09, 0);
-  private particleMaterial = material('#ffe695', { emissive: '#ffba55', emissiveIntensity: 0.3 });
-  private dustMaterial = new T.MeshBasicMaterial({
-    color: '#fffaf0',
-    transparent: true,
-    opacity: 0.75,
-  });
-  private confettiGeometry = new T.PlaneGeometry(0.2, 0.12);
-  private confettiMaterials = [
-    '#ff7eb6',
-    '#ffd65c',
-    '#6fe0ff',
-    '#8cf29a',
-    '#b79bff',
-    '#ffffff',
-  ].map((color) => new T.MeshBasicMaterial({ color, side: T.DoubleSide }));
+  private bursts: Bursts;
   // ゴール後の周回、着地の沈み込み、チェックポイントの輪の広がり。
   private orbit = 0;
   private celebration = 0;
   private impact = 0;
   private checkpointPulse: number[] = [];
   private placeholder?: T.Group;
-  private clouds = new T.Group();
   private time = 0;
+  // 描画が重い端末では解像度を下げ、軽ければ戻す（操作の応答を優先）。
+  private pixelRatio: number;
+  private maxPixelRatio: number;
+  private frameTimes: number[] = [];
+  private adjustedAt = 0;
   private shadow: T.Mesh;
-  private ballMaterial: T.MeshStandardMaterial;
+  private glass: T.ShaderMaterial;
   readonly dash: DashEffects;
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new T.WebGLRenderer({
@@ -94,42 +144,40 @@ export class View {
       alpha: false,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+    this.pixelRatio = this.maxPixelRatio = Math.min(devicePixelRatio, 1.75);
+    this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setClearColor('#94d6ea');
     this.renderer.outputColorSpace = T.SRGBColorSpace;
     this.renderer.toneMapping = T.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.toneMappingExposure = 1;
     this.scene.fog = new T.Fog('#bce7ef', 65, 165);
-    this.scene.add(new T.HemisphereLight('#fff9e7', '#7aa3bb', 2.8));
-    const sun = new T.DirectionalLight('#fff5dd', 3.1);
-    sun.position.set(-20, 40, 15);
-    this.scene.add(sun);
-    this.scene.add(this.level, this.actor, this.clouds);
+    this.hemisphere = new T.HemisphereLight('#fff9e7', '#7aa3bb', 2.8);
+    this.sun = new T.DirectionalLight('#fff5dd', 3.1);
+    this.sun.position.set(-20, 40, 15);
+    this.scene.add(this.hemisphere, this.sun, this.level, this.actor);
+    this.sky = new Sky(this.scene);
+    this.ambient = new Ambient(this.scene);
+    this.bursts = new Bursts(this.scene);
     this.shadow = new T.Mesh(
-      new T.CircleGeometry(0.48, 24),
+      new T.CircleGeometry(0.5, 24),
       new T.MeshBasicMaterial({
-        color: '#527a82',
+        color: '#2d4a52',
         transparent: true,
-        opacity: 0.2,
+        opacity: 0.28,
         depthWrite: false,
+        map: glowTexture(),
       }),
     );
     this.shadow.rotation.x = -Math.PI / 2;
     this.scene.add(this.shadow);
     this.actor.add(this.shell, this.character);
-    this.ballMaterial = material('#b9f4ff', {
-      transparent: true,
-      opacity: 0.18,
-      roughness: 0.12,
-      metalness: 0.25,
-      depthWrite: false,
-    });
-    const ball = new T.Mesh(new T.SphereGeometry(tuning.radius, 32, 24), this.ballMaterial);
+    this.glass = glassMaterial();
+    const ball = new T.Mesh(new T.SphereGeometry(tuning.radius, 40, 28), this.glass);
     ball.renderOrder = 3;
     this.shell.add(ball);
     this.dash = new DashEffects(this.scene, this.camera);
     this.scene.add(this.camera);
-    const ringMat = new T.MeshBasicMaterial({ color: '#efffff', transparent: true, opacity: 0.65 });
+    const ringMat = new T.MeshBasicMaterial({ color: '#efffff', transparent: true, opacity: 0.55 });
     for (let i = 0; i < 2; i++) {
       const ring = new T.Mesh(new T.TorusGeometry(0.522, 0.009, 5, 48), ringMat);
       ring.rotation.x = (i * Math.PI) / 2;
@@ -143,25 +191,6 @@ export class View {
     shine.position.set(-0.23, 0.32, 0.34);
     this.actor.add(shine);
     this.createPlaceholder();
-    const cloudGeo = new T.SphereGeometry(1, 12, 8),
-      cloudMat = material('#ffffff');
-    const cloudMesh = new T.InstancedMesh(cloudGeo, cloudMat, 45 * 3);
-    const cloudPose = new T.Object3D();
-    for (let i = 0; i < 45; i++) {
-      const x = Math.sin(i * 17.23) * 62,
-        z = 15 - i * 26;
-      for (let lobe = 0; lobe < 3; lobe++) {
-        cloudPose.position.set(
-          x + (lobe - 1) * 3,
-          -10 - (i % 4) * 2 + (lobe === 1 ? 0.8 : 0),
-          z + (lobe % 2),
-        );
-        cloudPose.scale.set(3.8, lobe === 1 ? 2.2 : 1.5, 2.7);
-        cloudPose.updateMatrix();
-        cloudMesh.setMatrixAt(i * 3 + lobe, cloudPose.matrix);
-      }
-    }
-    this.clouds.add(cloudMesh);
     window.addEventListener('resize', () => this.resize());
     this.resize();
   }
@@ -223,8 +252,8 @@ export class View {
     const geometries = new Set<T.BufferGeometry>(),
       materials = new Set<T.Material>();
     group.traverse((o) => {
-      if (o instanceof T.Mesh || o instanceof T.Sprite) {
-        if (o instanceof T.Mesh) geometries.add(o.geometry);
+      if (o instanceof T.Mesh || o instanceof T.Sprite || o instanceof T.Points) {
+        if (!(o instanceof T.Sprite)) geometries.add(o.geometry);
         for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
       }
     });
@@ -232,283 +261,369 @@ export class View {
     materials.forEach((m) => m.dispose());
     group.clear();
   }
+  private applyPalette(palette: Palette) {
+    this.renderer.setClearColor(palette.fog.color);
+    this.renderer.toneMappingExposure = palette.exposure;
+    this.scene.fog = new T.Fog(palette.fog.color, palette.fog.near, palette.fog.far);
+    this.hemisphere.color.set(palette.light.sky);
+    this.hemisphere.groundColor.set(palette.light.ground);
+    this.hemisphere.intensity = palette.light.hemisphere;
+    this.sun.color.set(palette.light.sun);
+    this.sun.intensity = palette.light.intensity;
+    this.sun.position.set(...palette.sun.direction).multiplyScalar(60);
+    this.ambient.setPalette(palette);
+  }
   build(course: Course) {
     this.dash.reset();
     this.activeCourse = course;
-    this.movers = [];
-    this.rotors = [];
-    this.winds = [];
     this.disposeGroup(this.level);
-    this.tarts.clear();
-    this.tartInstances = [];
+    this.bag.dispose();
+    this.movers = [];
+    this.winds = undefined;
+    this.scrolling = [];
+    this.jumpTop = this.jumpBeams = undefined;
+    this.tarts = [];
+    this.tartParts = [];
+    this.tartHalo = undefined;
     this.checkpoints = [];
+    this.banners = [];
+    this.signs = [];
+    this.goalStar = undefined;
     this.checkpointPulse = [];
-    this.particles.forEach((p) => this.scene.remove(p.mesh));
-    this.particles = [];
+    this.bursts.clear();
     this.orbit = this.celebration = this.impact = 0;
-    const sky = ['#80d3e6', '#e6b36b', '#b9a9e5', '#131b3a', '#474266', '#eb9b85'][course.theme];
-    this.renderer.setClearColor(sky);
-    if (this.scene.background instanceof T.Texture) this.scene.background.dispose();
-    const backdrop = document.createElement('canvas');
-    backdrop.width = 2;
-    backdrop.height = 256;
-    const ctx = backdrop.getContext('2d')!,
-      gradient = ctx.createLinearGradient(0, 0, 0, 256);
-    gradient.addColorStop(
-      0,
-      ['#459fcc', '#bd7139', '#8e6ebd', '#080e27', '#272943', '#ce6686'][course.theme],
+    const palette = palettes[course.theme] ?? palettes[0];
+    this.applyPalette(palette);
+    this.sky.build(course, palette);
+    const terrain = buildTerrain(course, palette, this.bag);
+    this.level.add(...terrain.objects);
+    this.movers = terrain.movers;
+    const decor = buildDecor(course, palette, this.bag);
+    this.level.add(decor.group);
+    this.decorUpdate = decor.update;
+    this.mechanics(course);
+    this.dash.addPanels(
+      course.pads.filter((p) => p.type === 'dash'),
+      this.level,
     );
-    gradient.addColorStop(0.65, sky);
-    gradient.addColorStop(
-      1,
-      ['#d7f4e4', '#ffe0a1', '#ffe9da', '#30446a', '#afa4cb', '#ffe1a9'][course.theme],
-    );
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 2, 256);
-    this.scene.background = new T.CanvasTexture(backdrop);
-    this.scene.background.colorSpace = T.SRGBColorSpace;
-    this.scene.fog = new T.Fog(sky, 60, 180);
-    const floor = material(surfaceColors[course.platforms[0].surface ?? 'grass']),
-      side = material(course.color),
-      cliff = material('#84aab3');
-    const roadMaterials = new Map<string, T.MeshStandardMaterial>();
-    for (const p of course.platforms) {
-      const surface = p.surface ?? 'grass';
-      const layer = p.shape
-        ? 'island'
-        : p.id.startsWith('shortcut') || p.id.startsWith('moving-')
-          ? 'branch'
-          : 'road';
-      const materialKey = surface + '/' + layer;
-      if (!roadMaterials.has(materialKey)) {
-        const m = roadMaterial(surface);
-        if (layer !== 'road') {
-          m.polygonOffset = true;
-          m.polygonOffsetFactor = layer === 'island' ? -2 : -1;
-          m.polygonOffsetUnits = -1;
-        }
-        roadMaterials.set(materialKey, m);
-      }
-      const topMaterial = roadMaterials.get(materialKey)!;
-      if (p.vertices) {
-        const geometry = new T.BufferGeometry();
-        geometry.setAttribute(
-          'position',
-          new T.Float32BufferAttribute(
-            p.vertices.flatMap((p) => [p.x, p.y, p.z]),
-            3,
-          ),
-        );
-        geometry.setAttribute(
-          'uv',
-          new T.Float32BufferAttribute(
-            p.vertices.flatMap((p) => [p.x / 4, p.z / 4]),
-            2,
-          ),
-        );
-        geometry.setIndex([0, 1, 2, 0, 2, 3]);
-        geometry.computeVertexNormals();
-        topMaterial.side = T.DoubleSide;
-        this.level.add(new T.Mesh(geometry, topMaterial));
-        const walls = new T.BufferGeometry(),
-          coords: number[] = [];
-        for (const [a, b] of [
-          [0, 1],
-          [2, 3],
-        ]) {
-          const u = p.vertices[a],
-            v = p.vertices[b];
-          coords.push(
-            u.x,
-            u.y,
-            u.z,
-            v.x,
-            v.y,
-            v.z,
-            v.x,
-            v.y - 0.8,
-            v.z,
-            u.x,
-            u.y,
-            u.z,
-            v.x,
-            v.y - 0.8,
-            v.z,
-            u.x,
-            u.y - 0.8,
-            u.z,
-          );
-        }
-        walls.setAttribute('position', new T.Float32BufferAttribute(coords, 3));
-        walls.computeVertexNormals();
-        walls.setAttribute(
-          'uv',
-          new T.Float32BufferAttribute(Array((coords.length / 3) * 2).fill(0), 2),
-        );
-        this.level.add(new T.Mesh(walls, side));
-        continue;
-      }
-      if (p.shape || p.motion) {
-        const group = new T.Group();
-        const mesh = new T.Mesh(
-          p.shape
-            ? new T.CylinderGeometry(p.w / 2, p.w / 2, 1, p.shape === 'hex' ? 6 : 32)
-            : new T.BoxGeometry(p.w, 1, p.d),
-          topMaterial,
-        );
-        mesh.position.y = -0.5;
-        group.add(mesh);
-        group.position.set(p.x, p.y, p.z);
-        group.rotation.y = p.angle ?? 0;
-        this.level.add(group);
-        if (p.motion) {
-          const trimMaterial = material(p.motion.kind === 'lift' ? '#70e8ff' : '#ffe7a2', {
-            emissive: '#58baca',
-            emissiveIntensity: 0.6,
-          });
-          this.movers.push({ group, platform: p, trim: trimMaterial });
-          // 静止区間のある橋は、つながり具合を遠くから読めるよう光の縁を太くし、両端にも付ける。
-          const signal = p.motion.dwell ? 0.42 : 0.12;
-          for (const side of [-1, 1]) {
-            const trim = new T.Mesh(new T.BoxGeometry(signal, 0.07, p.d), trimMaterial);
-            trim.position.set(side * (p.w / 2 - signal), 0.05, 0);
-            group.add(trim);
-            if (!p.motion.dwell) continue;
-            const end = new T.Mesh(new T.BoxGeometry(p.w, 0.07, signal), trimMaterial);
-            end.position.set(0, 0.05, side * (p.d / 2 - signal));
-            group.add(end);
-          }
-          if (p.motion.kind === 'lift')
-            for (const side of [-1, 1]) {
-              const pole = new T.Mesh(
-                new T.CylinderGeometry(0.13, 0.2, p.motion.amplitude * 2 + 2, 6),
-                material('#768eaf'),
-              );
-              pole.position.set(p.x + side * (p.w / 2 + 0.5), p.y, p.z);
-              this.level.add(pole);
-            }
-        }
-        continue;
-      }
-      const slab = new T.Mesh(new T.BoxGeometry(p.w, 0.65, p.d), side);
-      slab.position.set(p.x, p.y - 0.5, p.z);
-      slab.scale.y = 1 / 0.65;
-      slab.rotation.y = p.angle ?? 0;
-      this.level.add(slab);
-      const top = new T.Mesh(new T.BoxGeometry(p.w - 0.12, 0.08, p.d - 0.12), topMaterial);
-      top.position.set(p.x, p.y - 0.04, p.z);
-      top.rotation.y = p.angle ?? 0;
-      this.level.add(top);
-      if (p.id.startsWith('island')) {
-        const rock = new T.Mesh(new T.ConeGeometry(4.5, 5, 5), cliff);
-        rock.rotation.z = Math.PI;
-        rock.position.set(p.x, -3, p.z);
-        this.level.add(rock);
-        const trim = new T.Mesh(new T.TorusGeometry(2.85, 0.055, 6, 48), material(course.color));
-        trim.rotation.x = -Math.PI / 2;
-        trim.position.set(p.x, 0.045, p.z);
-        this.level.add(trim);
-      }
+    this.jumpPads(course.pads.filter((p) => p.type === 'jump'));
+    this.buildTarts(course);
+    this.buildCheckpoints(course);
+    this.buildGoal(course);
+    this.flag(course.start.x - 2.8, course.start.z, 'START', course.color, course.start.y - 0.6);
+    this.snap(course.start);
+  }
+  /** 区間の看板、風・ベルトコンベア・ネオンのゲート。 */
+  private mechanics(course: Course) {
+    const signs = [
+      ...(course.sections ?? []),
+      ...(() => {
+        // 入門コースの動く橋の分岐
+        const moving = course.platforms.find((p) => p.motion),
+          branch = course.branches[0];
+        if (!moving || !branch || course.sections?.length) return [];
+        return [{ ...branch[0], title: 'DETOUR', hint: '動く橋 → 高さを見て渡ろう' }];
+      })(),
+    ];
+    for (const section of signs) {
+      const heading = headingAt(course, section);
+      const sign = sprite(signTexture(section.title, section.hint));
+      // 道の上に重ならないよう、道幅の外側に立てる。
+      const side = Math.max(
+        5.5,
+        ...platformsNear(course, section)
+          .filter((p) => p.lane)
+          .map((p) => p.lane!.width / 2 + 3.2),
+      );
+      sign.position.set(
+        section.x - Math.cos(heading) * side,
+        section.y + 3,
+        section.z + Math.sin(heading) * side,
+      );
+      sign.scale.set(6, 1.97, 1);
+      sign.material.transparent = true;
+      this.level.add(sign);
+      this.signs.push(sign);
     }
-    floor.dispose();
-    cliff.dispose();
-    this.decorate(course);
-    this.decorateMechanics(course);
-    for (const pad of course.pads) {
-      if (pad.type === 'dash') {
-        this.dash.addPanel(pad, this.level);
-        continue;
+    const winds = course.platforms.filter((p, i) => p.effect?.kind === 'wind' && i % 5 === 0);
+    if (winds.length) {
+      const items = winds.flatMap((p) =>
+        Array.from({ length: 4 }, (_, n) => ({
+          origin: new T.Vector3(p.x, p.y + 0.6 + n * 0.35, p.z + n * 1.1),
+          direction: new T.Vector3(p.effect!.x, 0, p.effect!.z),
+          phase: n * 0.23 + p.x * 0.01,
+        })),
+      );
+      const mesh = new T.InstancedMesh(
+        new T.PlaneGeometry(2.4, 0.09).rotateX(-Math.PI / 2),
+        additive('#fff6ce', 1, this.bag.add(stripTexture())),
+        items.length,
+      );
+      mesh.frustumCulled = false;
+      this.winds = { mesh, items };
+      this.level.add(mesh);
+    }
+    const conveyors = course.platforms.filter(
+      (p, i) => p.effect?.kind === 'conveyor' && i % 4 === 0,
+    );
+    if (conveyors.length) {
+      const texture = this.bag.add(chevronTexture());
+      this.scrolling.push({ texture, speed: 1.6 });
+      const parts = conveyors.map((p) => {
+        const g = new T.PlaneGeometry(p.w * 0.3, 2).rotateX(-Math.PI / 2);
+        const uv = g.getAttribute('uv');
+        for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * 2);
+        return {
+          geometry: g,
+          matrix: at(p.x, p.y + 0.03, p.z, 1, [0, Math.atan2(-p.effect!.x, -p.effect!.z), 0]),
+        };
+      });
+      this.level.add(new T.Mesh(mergePlaced(parts), glowMaterial('#6ff3ff', texture, 0.55)));
+    }
+    if (course.theme === 3) {
+      // ネオンのゲート: 道の脇に並ぶ光の門
+      const parts: Parameters<typeof model>[0] = [];
+      for (let i = 8; i < course.route.length; i += 10) {
+        const p = course.route[i],
+          next = course.route[Math.min(course.route.length - 1, i + 1)],
+          angle = Math.atan2(next.x - p.x, next.z - p.z);
+        const side = i % 20 ? 1 : -1,
+          color = i % 20 ? '#57ecff' : '#ff85cd';
+        const gx = p.x - Math.cos(angle) * side * 10.5,
+          gz = p.z + Math.sin(angle) * side * 10.5;
+        for (const s of [-1, 1])
+          parts.push({
+            geometry: new T.BoxGeometry(0.22, 5, 0.28),
+            color,
+            matrix: at(
+              gx + Math.cos(angle) * s * 2.8,
+              p.y + 2.5,
+              gz - Math.sin(angle) * s * 2.8,
+              1,
+              [0, angle, 0],
+            ),
+          });
+        parts.push({
+          geometry: new T.BoxGeometry(5.8, 0.18, 0.28),
+          color,
+          matrix: at(gx, p.y + 5, gz, 1, [0, angle, 0]),
+        });
       }
-      const mesh = new T.Mesh(
-        new T.BoxGeometry(pad.w, 0.055, pad.d),
-        material('#ec8ea4', {
-          emissive: '#bc436e',
-          emissiveIntensity: 0.18,
+      if (parts.length)
+        this.level.add(new T.Mesh(model(parts), new T.MeshBasicMaterial({ vertexColors: true })));
+    }
+  }
+  /** ジャンプ台: 桃色の台、上へ流れる山形、立ちのぼる光。すべてまとめて描く。 */
+  private jumpPads(pads: Pad[]) {
+    if (!pads.length) return;
+    const base: { geometry: T.BufferGeometry; matrix: T.Matrix4 }[] = [],
+      top: typeof base = [],
+      arrows: typeof base = [],
+      beams: typeof base = [];
+    for (const pad of pads) {
+      const place = at(pad.x, (pad.y ?? 0) + 0.06, pad.z, 1, [0, Math.atan2(-pad.dx, -pad.dz), 0]);
+      base.push({ geometry: new T.BoxGeometry(pad.w + 0.3, 0.14, pad.d + 0.3), matrix: place });
+      top.push({
+        geometry: new T.BoxGeometry(pad.w - 0.2, 0.05, pad.d - 0.2).translate(0, 0.08, 0),
+        matrix: place,
+      });
+      const arrow = new T.PlaneGeometry(Math.min(2.2, pad.w - 0.6), pad.d - 0.4).rotateX(
+        -Math.PI / 2,
+      );
+      const uv = arrow.getAttribute('uv');
+      for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * ((pad.d - 0.4) / 1.2));
+      arrows.push({ geometry: arrow.translate(0, 0.12, 0), matrix: place });
+      for (const yaw of [0, Math.PI / 2])
+        beams.push({
+          geometry: new T.PlaneGeometry(pad.w * 0.8, 4.5).rotateY(yaw).translate(0, 2.3, 0),
+          matrix: place,
+        });
+    }
+    const chevrons = this.bag.add(chevronTexture());
+    this.scrolling.push({ texture: chevrons, speed: 2.4 });
+    this.jumpTop = new T.MeshStandardMaterial({
+      color: '#ff7fb2',
+      emissive: '#ff4f98',
+      emissiveIntensity: 0.4,
+      roughness: 0.45,
+    });
+    this.jumpBeams = beamMaterial('#ff8fc8', this.bag.add(stripTexture()));
+    this.level.add(
+      new T.Mesh(mergePlaced(base), new T.MeshLambertMaterial({ color: '#5b2a63' })),
+      new T.Mesh(mergePlaced(top), this.jumpTop),
+      new T.Mesh(mergePlaced(arrows), glowMaterial('#ffffff', chevrons, 0.9)),
+      new T.Mesh(mergePlaced(beams), this.jumpBeams),
+    );
+  }
+  /** タルト: 波形のタルト生地・クリーム・いちごの3部品と、足元の光。 */
+  private buildTarts(course: Course) {
+    this.tarts = course.tarts;
+    if (!this.tarts.length) return;
+    const crust = new T.CylinderGeometry(0.29, 0.21, 0.15, 16, 1);
+    const position = crust.getAttribute('position');
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i),
+        z = position.getZ(i),
+        r = Math.hypot(x, z),
+        a = Math.atan2(z, x);
+      if (r < 0.05) continue;
+      const k = 1 + 0.06 * Math.cos(a * 8);
+      position.setXYZ(i, x * k, position.getY(i), z * k);
+    }
+    crust.computeVertexNormals();
+    const parts: [T.BufferGeometry, T.Material, T.Matrix4][] = [
+      [crust, new T.MeshLambertMaterial({ color: '#d99a52' }), at(0, 0, 0)],
+      [
+        new T.CylinderGeometry(0.22, 0.22, 0.08, 12),
+        new T.MeshLambertMaterial({ color: '#fff0c2' }),
+        at(0, 0.09, 0),
+      ],
+      [
+        new T.SphereGeometry(0.1, 8, 6),
+        new T.MeshStandardMaterial({ color: '#e8394e', roughness: 0.3, emissive: '#5a0010' }),
+        at(0, 0.19, 0, [1, 1.15, 1]),
+      ],
+    ];
+    this.tartParts = parts.map(([geometry, m, offset]) => {
+      const mesh = new T.InstancedMesh(geometry, m, this.tarts.length);
+      mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      this.level.add(mesh);
+      return { mesh, offset };
+    });
+    const halo = new T.BufferGeometry();
+    halo.setAttribute(
+      'position',
+      new T.BufferAttribute(new Float32Array(this.tarts.length * 3), 3),
+    );
+    halo.setAttribute('color', new T.BufferAttribute(new Float32Array(this.tarts.length * 3), 3));
+    this.tartHalo = new T.Points(
+      halo,
+      new T.PointsMaterial({
+        size: 1.15,
+        map: this.bag.add(glowTexture()),
+        vertexColors: true,
+        transparent: true,
+        depthWrite: false,
+        blending: T.AdditiveBlending,
+      }),
+    );
+    this.tartHalo.frustumCulled = false;
+    this.level.add(this.tartHalo);
+  }
+  /** チェックポイント: 床の輪、道の外側に立つ柱、高い位置の札。 */
+  private buildCheckpoints(course: Course) {
+    const posts: Parameters<typeof model>[0] = [];
+    course.checkpoints.forEach((cp, i) => {
+      const ring = new T.Mesh(
+        new T.TorusGeometry(2.1, 0.11, 6, 48),
+        new T.MeshStandardMaterial({
+          color: '#8eb3da',
+          emissive: '#4c7fae',
+          emissiveIntensity: 0.4,
         }),
       );
-      mesh.position.set(pad.x, (pad.y ?? 0) + 0.075, pad.z);
-      mesh.rotation.y = Math.atan2(-pad.dx, -pad.dz);
-      this.level.add(mesh);
-      const arrow = new T.Shape();
-      arrow.moveTo(-0.62, -0.35);
-      arrow.lineTo(0, 0.28);
-      arrow.lineTo(0.62, -0.35);
-      arrow.lineTo(0.62, -0.05);
-      arrow.lineTo(0, 0.6);
-      arrow.lineTo(-0.62, -0.05);
-      arrow.closePath();
-      const indicator = new T.Mesh(
-        new T.ShapeGeometry(arrow),
-        new T.MeshBasicMaterial({ color: '#fffbed', side: T.DoubleSide }),
-      );
-      indicator.rotation.x = -Math.PI / 2;
-      indicator.rotation.z = Math.atan2(-pad.dx, -pad.dz);
-      indicator.position.set(pad.x, (pad.y ?? 0) + 0.111, pad.z);
-      this.level.add(indicator);
-    }
-    const crust = material('#d69a55'),
-      cream = material('#ffe7a1'),
-      berry = material('#e56e77');
-    for (const t of course.tarts) {
-      const group = new T.Group();
-      const base = new T.Mesh(new T.CylinderGeometry(0.27, 0.2, 0.14, 12), crust);
-      group.add(base);
-      const filling = new T.Mesh(new T.CylinderGeometry(0.21, 0.21, 0.07, 16), cream);
-      filling.position.y = 0.08;
-      group.add(filling);
-      const fruit = new T.Mesh(new T.SphereGeometry(0.1, 10, 8), berry);
-      fruit.position.y = 0.17;
-      group.add(fruit);
-      group.position.set(t.x, t.y + 0.85, t.z);
-      group.userData.floor = t.y;
-      this.level.add(group);
-      this.tarts.set(t.id, group);
-    }
-    const tartGroups = [...this.tarts.values()];
-    if (tartGroups.length) {
-      for (let part = 0; part < 3; part++) {
-        const original = tartGroups[0].children[part] as T.Mesh;
-        const instances = new T.InstancedMesh(
-          original.geometry,
-          original.material,
-          tartGroups.length,
-        );
-        instances.frustumCulled = false;
-        instances.instanceMatrix.setUsage(T.DynamicDrawUsage);
-        this.tartInstances.push(instances);
-        this.level.add(instances);
-        for (const group of tartGroups.slice(1))
-          (group.children[part] as T.Mesh).geometry.dispose();
-      }
-      for (const group of tartGroups) this.level.remove(group);
-    }
-    course.checkpoints.forEach((cp, i) => {
-      const ring = new T.Mesh(new T.TorusGeometry(2.1, 0.1, 6, 40), material('#8eb3da'));
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(cp.x, cp.y + 0.09, cp.z);
       this.level.add(ring);
       this.checkpoints.push(ring);
-      this.flag(cp.x - 2.8, cp.z, `${i + 1}`, '#8eb3da', cp.y);
+      const heading = headingAt(course, { ...cp, y: cp.y });
+      const half = Math.max(
+        6.4,
+        ...platformsNear(course, cp)
+          .filter((p) => p.lane)
+          .map((p) => p.lane!.width / 2 + 0.7),
+      );
+      for (const s of [-1, 1]) {
+        const x = cp.x - Math.cos(heading) * s * half,
+          z = cp.z + Math.sin(heading) * s * half;
+        posts.push({
+          geometry: new T.CylinderGeometry(0.16, 0.22, 5.4, 8),
+          color: '#f4f1e6',
+          matrix: at(x, cp.y + 2.7, z),
+        });
+        posts.push({
+          geometry: new T.SphereGeometry(0.34, 12, 8),
+          color: '#8fd3ff',
+          matrix: at(x, cp.y + 5.55, z),
+        });
+      }
+      const banner = sprite(labelTexture(`CHECKPOINT ${i + 1}`, '#3f7fb0', '#ffffff'));
+      banner.position.set(cp.x, cp.y + 5.3, cp.z);
+      banner.scale.set(4.2, 0.79, 1);
+      banner.material.transparent = true;
+      this.level.add(banner);
+      this.banners.push(banner);
     });
-    const goal = new T.Group(),
-      gold = material('#efbc5a');
-    for (const x of [-2.1, 2.1]) {
-      const pole = new T.Mesh(new T.CylinderGeometry(0.12, 0.17, 4, 10), gold);
-      pole.position.set(x, 2, 0);
-      goal.add(pole);
+    if (posts.length)
+      this.level.add(new T.Mesh(model(posts), new T.MeshLambertMaterial({ vertexColors: true })));
+  }
+  /** ゴール: 金の門、市松の帯、回る星、床の光。 */
+  private buildGoal(course: Course) {
+    const g = course.goal,
+      heading = headingAt(course, g);
+    const parts: Parameters<typeof model>[0] = [];
+    for (const s of [-1, 1]) {
+      const x = s * 2.4;
+      parts.push({
+        geometry: new T.CylinderGeometry(0.18, 0.24, 5.2, 12),
+        color: '#efbc5a',
+        matrix: at(x, 2.6, 0),
+      });
+      for (let k = 0; k < 4; k++)
+        parts.push({
+          geometry: new T.TorusGeometry(0.24, 0.05, 6, 16),
+          color: '#fff3c8',
+          matrix: at(x, 0.9 + k * 1.2, 0, 1, [Math.PI / 2, 0, 0]),
+        });
+      parts.push({
+        geometry: new T.SphereGeometry(0.3, 12, 8),
+        color: '#fff3c8',
+        matrix: at(x, 5.35, 0),
+      });
     }
-    const arch = new T.Mesh(new T.TorusGeometry(2.1, 0.16, 8, 32, Math.PI), gold);
-    arch.position.y = 4;
-    goal.add(arch);
-    const banner = this.label('GOAL', '#fff5d4', '#9b722b');
-    banner.position.set(0, 3.8, 0);
-    banner.scale.set(3.8, 1, 1);
-    goal.add(banner);
-    goal.position.set(course.goal.x, course.goal.y, course.goal.z);
+    parts.push({
+      geometry: new T.TorusGeometry(2.4, 0.16, 8, 40, Math.PI),
+      color: '#efbc5a',
+      matrix: at(0, 5.2, 0),
+    });
+    const arch = new T.Mesh(model(parts), new T.MeshLambertMaterial({ vertexColors: true }));
+    const checker = this.bag.add(checkerTexture());
+    checker.repeat.set(3, 1);
+    const band = new T.Mesh(
+      new T.PlaneGeometry(4.6, 0.7),
+      new T.MeshBasicMaterial({ map: checker, side: T.DoubleSide }),
+    );
+    band.position.y = 4.4;
+    const label = sprite(labelTexture('GOAL', '#b8812c', '#fff7dc', 256));
+    label.position.y = 6.5;
+    label.scale.set(2.8, 1.05, 1);
+    const star = new T.Mesh(
+      new T.OctahedronGeometry(0.5, 0).scale(1, 1.3, 0.35),
+      new T.MeshStandardMaterial({ color: '#ffe066', emissive: '#ffb800', emissiveIntensity: 0.7 }),
+    );
+    star.position.y = 7.6;
+    this.goalStar = star;
+    const glow = new T.Mesh(
+      new T.RingGeometry(1.2, 3, 48).rotateX(-Math.PI / 2),
+      additive('#ffe08a', 0.45, this.bag.add(glowTexture())),
+    );
+    glow.position.y = 0.05;
+    const goal = new T.Group();
+    goal.add(arch, band, label, star, glow);
+    goal.position.set(g.x, g.y, g.z);
+    // 門の向き: 柱は道の両脇、帯は進行方向に正対する。
+    goal.rotation.y = heading;
     this.level.add(goal);
-    this.flag(course.start.x - 2.8, course.start.z, 'START', course.color, course.start.y - 0.6);
-    this.snap(course.start);
-    this.batchStatic();
+  }
+  private flag(x: number, z: number, text: string, color: string, y = 0) {
+    const pole = new T.Mesh(new T.CylinderGeometry(0.055, 0.055, 2.1, 8), material('#f7f7e8'));
+    pole.position.set(x, y + 1.05, z);
+    this.level.add(pole);
+    const label = sprite(labelTexture(text, color, '#ffffff', 256));
+    label.position.set(x + 0.45, y + 1.95, z);
+    label.scale.set(1.6, 0.6, 1);
+    this.level.add(label);
   }
   worldInput(input: InputVector) {
     return screenToWorld(input, this.routeCamera.yaw);
@@ -529,413 +644,114 @@ export class View {
       y: (1 - center.y) / 2,
     };
   }
-  private batchStatic() {
-    const batches = new Map<
-      string,
-      { material: T.Material; geometries: T.BufferGeometry[]; meshes: T.Mesh[] }
-    >();
-    for (const child of [...this.level.children]) {
-      if (
-        !(child instanceof T.Mesh) ||
-        child instanceof T.InstancedMesh ||
-        !(child.material instanceof T.MeshStandardMaterial) ||
-        this.checkpoints.includes(child)
-      )
-        continue;
-      const m = child.material;
-      const key = [
-        m.color.getHex(),
-        m.roughness,
-        m.metalness,
-        m.emissive.getHex(),
-        m.emissiveIntensity,
-        m.side,
-        m.map?.uuid ?? '',
-      ].join('/');
-      child.updateMatrix();
-      const g = child.geometry.index ? child.geometry.toNonIndexed() : child.geometry.clone();
-      g.applyMatrix4(child.matrix);
-      if (!g.hasAttribute('uv'))
-        g.setAttribute(
-          'uv',
-          new T.Float32BufferAttribute(Array(g.getAttribute('position').count * 2).fill(0), 2),
-        );
-      let batch = batches.get(key);
-      if (!batch) {
-        batch = { material: m, geometries: [], meshes: [] };
-        batches.set(key, batch);
-      }
-      batch.geometries.push(g);
-      batch.meshes.push(child);
-    }
-    for (const batch of batches.values()) {
-      const combined = mergeGeometries(batch.geometries);
-      if (!combined) continue;
-      for (const m of batch.meshes) {
-        this.level.remove(m);
-        m.geometry.dispose();
-        if (m.material !== batch.material) (m.material as T.Material).dispose();
-      }
-      batch.geometries.forEach((g) => g.dispose());
-      this.level.add(new T.Mesh(combined, batch.material));
-    }
-  }
-  private decorate(course: Course) {
-    const theme = course.theme;
-    const add = (
-      geo: T.BufferGeometry,
-      color: string,
-      p: Vec,
-      scale: Vec = { x: 1, y: 1, z: 1 },
-    ) => {
-      const mesh = new T.Mesh(
-        geo,
-        material(color, { metalness: theme === 3 || theme === 4 ? 0.3 : 0 }),
-      );
-      mesh.position.set(p.x, p.y, p.z);
-      mesh.scale.set(scale.x, scale.y, scale.z);
-      this.level.add(mesh);
-      return mesh;
-    };
-    for (let i = 0; i < course.route.length; i += 16) {
-      const p = course.route[i],
-        side = i % 32 === 0 ? 1 : -1,
-        x = p.x + side * (12 + (i % 9));
-      if (theme === 0) {
-        add(
-          new T.DodecahedronGeometry(1, 0),
-          '#e6e2c7',
-          { x, y: p.y - 5, z: p.z },
-          { x: 7, y: 9, z: 7 },
-        );
-        add(new T.CylinderGeometry(0.3, 0.5, 7, 7), '#9f7352', { x, y: p.y + 2, z: p.z });
-        for (let n = 0; n < 4; n++) {
-          const leaf = add(
-            new T.SphereGeometry(1, 8, 5),
-            '#43a869',
-            {
-              x: x + Math.sin((n * Math.PI) / 2) * 1.5,
-              y: p.y + 5,
-              z: p.z + Math.cos((n * Math.PI) / 2) * 1.5,
-            },
-            { x: 3, y: 0.35, z: 1 },
-          );
-          leaf.rotation.y = (n * Math.PI) / 2;
-        }
-      } else if (theme === 1) {
-        const rock = add(new T.ConeGeometry(4 + (i % 3), 14, 5), i % 32 ? '#c88042' : '#e1a456', {
-          x,
-          y: p.y - 3,
-          z: p.z,
-        });
-        rock.rotation.y = i * 0.17;
-        if (i % 32 === 0)
-          add(new T.TorusGeometry(7, 1.2, 6, 18, Math.PI), '#9b5d38', {
-            x,
-            y: p.y + 1,
-            z: p.z,
-          }).rotation.y = i * 0.04;
-      } else if (theme === 2) {
-        add(new T.CylinderGeometry(4, 4, 2, 24), '#dca258', { x, y: p.y - 1, z: p.z });
-        add(new T.CylinderGeometry(3.8, 3.8, 0.6, 24), '#fff0cd', { x, y: p.y + 0.3, z: p.z });
-        add(new T.SphereGeometry(1.2, 12, 8), '#f57497', { x, y: p.y + 1.5, z: p.z });
-        const candy = add(new T.TorusGeometry(3, 0.65, 8, 24), i % 32 ? '#c6f496' : '#ff97c7', {
-          x: x + side * 4,
-          y: p.y + 7,
-          z: p.z,
-        });
-        candy.rotation.y = 0.4;
-      } else if (theme === 3) {
-        const height = 12 + (i % 35);
-        add(new T.BoxGeometry(7, height, 7), '#253551', { x, y: p.y + height / 2 - 10, z: p.z });
-        for (let j = 0; j < 4; j++)
-          add(new T.BoxGeometry(7.1, 0.2, 7.1), j % 2 ? '#fb73c7' : '#49dfe7', {
-            x,
-            y: p.y - 7 + (j * height) / 4,
-            z: p.z,
-          });
-      } else if (theme === 4) {
-        for (let n = 0; n < 3; n++) {
-          const crystal = add(new T.ConeGeometry(2, 10 + n * 3, 5), n % 2 ? '#aceefa' : '#bb87e8', {
-            x: x + n * 2,
-            y: p.y + 2,
-            z: p.z + n * 3,
-          });
-          crystal.rotation.z = side * (0.1 + n * 0.12);
-        }
-        if (i < course.route.length * 0.55) {
-          const arch = add(new T.TorusGeometry(12, 2, 6, 16, Math.PI), '#6a6081', {
-            x: x + side * 6,
-            y: p.y,
-            z: p.z,
-          });
-          arch.rotation.y = i * 0.07;
-        }
-      } else {
-        add(new T.ConeGeometry(7, 12, 7), '#a97470', { x, y: p.y - 6, z: p.z }).rotation.z =
-          Math.PI;
-        add(new T.CylinderGeometry(0.7, 1.2, 8, 10), '#fff0d0', { x, y: p.y + 4, z: p.z });
-        const rotor = new T.Group();
-        rotor.position.set(x, p.y + 8, p.z + 0.9);
-        this.level.add(rotor);
-        this.rotors.push(rotor);
-        for (let n = 0; n < 4; n++) {
-          const blade = new T.Mesh(new T.BoxGeometry(0.7, 6, 0.2), material('#eed9b7'));
-          blade.position.set(Math.sin((n * Math.PI) / 2) * 2, Math.cos((n * Math.PI) / 2) * 2, 0);
-          rotor.add(blade);
-          blade.rotation.z = (-n * Math.PI) / 2;
-        }
-      }
-    }
-    if (theme === 0) {
-      const sea = add(new T.PlaneGeometry(2200, 2200), '#329bc2', { x: 0, y: -18, z: -500 });
-      sea.rotation.x = -Math.PI / 2;
-      const pad = course.pads.find((p) => p.type === 'jump')!;
-      const arch = add(new T.TorusGeometry(7, 1.3, 7, 18, Math.PI), '#ded7b9', {
-        x: pad.x,
-        y: pad.y ?? 0,
-        z: pad.z,
-      });
-      arch.rotation.y = Math.atan2(-pad.dx, -pad.dz);
-    }
-    if (theme === 2) {
-      add(new T.CylinderGeometry(16, 18, 8, 32), '#daa056', { x: 25, y: 4, z: -290 });
-      add(new T.CylinderGeometry(15, 15, 2, 32), '#fff0cb', { x: 25, y: 9, z: -290 });
-      add(new T.SphereGeometry(4, 16, 12), '#ed698e', { x: 25, y: 12, z: -290 });
-    }
-    if (theme === 5) add(new T.SphereGeometry(22, 20, 12), '#ffe1a5', { x: 0, y: 30, z: -1160 });
-    const moving = course.platforms.find((p) => p.motion);
-    const branch = course.branches[0];
-    if (!moving || !branch) return;
-    const sign = this.label('動く橋 →', '#fff3d4', '#775d4c');
-    sign.position.set(branch[0].x, branch[0].y + 2.6, branch[0].z);
-    sign.scale.set(3, 0.75, 1);
-    this.level.add(sign);
-    const dock = this.label(
-      moving.motion?.kind === 'lift'
-        ? '高さを見て渡ろう'
-        : moving.motion?.kind === 'slide'
-          ? '橋の位置を見て渡ろう'
-          : 'ゆっくり橋を渡ろう',
-      '#fff3d4',
-      '#775d4c',
-    );
-    dock.position.set(moving.x, moving.y + 3, moving.z);
-    dock.scale.set(4.5, 1.1, 1);
-    this.level.add(dock);
-  }
-  private decorateMechanics(course: Course) {
-    for (const section of course.sections ?? []) {
-      const nearest = course.route.reduce(
-        (best, p, i) =>
-          Math.hypot(p.x - section.x, p.z - section.z) <
-          Math.hypot(course.route[best].x - section.x, course.route[best].z - section.z)
-            ? i
-            : best,
-        0,
-      );
-      const next = course.route[Math.min(course.route.length - 1, nearest + 2)],
-        dx = next.x - section.x,
-        dz = next.z - section.z,
-        length = Math.hypot(dx, dz) || 1;
-      const title = this.label(section.title, '#173949', '#fff1c2');
-      title.position.set(
-        section.x - (dz / length) * 5,
-        section.y + 3.1,
-        section.z + (dx / length) * 5,
-      );
-      title.scale.set(5.8, 1.1, 1);
-      this.level.add(title);
-      const hint = this.label(section.hint, '#fff3d4', '#314b5c');
-      hint.position.copy(title.position).y -= 0.9;
-      hint.scale.set(5.8, 0.9, 1);
-      this.level.add(hint);
-    }
-    let effectIndex = 0;
-    for (const p of course.platforms) {
-      if (!p.effect || effectIndex++ % 7 !== 0) continue;
-      const effect = p.effect;
-      if (effect.kind === 'wind') {
-        for (let n = 0; n < 4; n++) {
-          const mesh = new T.Mesh(
-            new T.BoxGeometry(1.9, 0.045, 0.08),
-            new T.MeshBasicMaterial({
-              color: '#fff6ce',
-              transparent: true,
-              opacity: 0.5,
-              depthWrite: false,
-            }),
-          );
-          mesh.rotation.y = -Math.atan2(effect.z, effect.x);
-          this.level.add(mesh);
-          this.winds.push({
-            mesh,
-            origin: new T.Vector3(p.x, p.y + 0.8 + n * 0.3, p.z + n * 1.1),
-            direction: new T.Vector3(effect.x, 0, effect.z),
-            phase: n * 0.23,
-          });
-        }
-      } else {
-        const mark = this.label('>>>', '#185c78', '#98ffff');
-        mark.position.set(p.x, p.y + 0.22, p.z);
-        mark.scale.set(2, 0.55, 1);
-        this.level.add(mark);
-      }
-    }
-    if (course.theme === 3) {
-      for (let i = 8; i < course.route.length; i += 10) {
-        const p = course.route[i],
-          next = course.route[Math.min(course.route.length - 1, i + 1)],
-          angle = Math.atan2(next.x - p.x, next.z - p.z);
-        const gate = new T.Group();
-        const side = i % 20 ? 1 : -1;
-        gate.position.set(
-          p.x - Math.cos(angle) * side * 10,
-          p.y,
-          p.z + Math.sin(angle) * side * 10,
-        );
-        gate.rotation.y = angle;
-        const mat = material(i % 20 ? '#57ecff' : '#ff85cd', {
-          emissive: i % 20 ? '#239fbf' : '#ac3289',
-          emissiveIntensity: 1.2,
-        });
-        for (const side of [-1, 1]) {
-          const pole = new T.Mesh(new T.BoxGeometry(0.22, 5, 0.28), mat);
-          pole.position.set(side * 2.8, 2.5, 0);
-          gate.add(pole);
-        }
-        const top = new T.Mesh(new T.BoxGeometry(5.8, 0.18, 0.28), mat);
-        top.position.y = 5;
-        gate.add(top);
-        this.level.add(gate);
-      }
-    }
-  }
-  private label(text: string, background: string, color: string) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, 512, 64);
-    ctx.fillStyle = color;
-    ctx.font = 'bold 32px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, 256, 34, 492);
-    const texture = new T.CanvasTexture(canvas);
-    texture.colorSpace = T.SRGBColorSpace;
-    const m = new T.SpriteMaterial({ map: texture });
-    m.addEventListener('dispose', () => texture.dispose());
-    return new T.Sprite(m);
-  }
-  private flag(x: number, z: number, text: string, color: string, y = 0) {
-    const pole = new T.Mesh(new T.CylinderGeometry(0.055, 0.055, 2.1, 8), material('#f7f7e8'));
-    pole.position.set(x, y + 1.05, z);
-    this.level.add(pole);
-    const label = this.label(text, color, '#ffffff');
-    label.position.set(x + 0.45, y + 1.85, z);
-    label.scale.set(1.5, 0.45, 1);
-    this.level.add(label);
-  }
   snap(p: Vec) {
     this.follow.set(p.x, p.y, p.z);
     if (this.activeCourse) this.routeCamera.reset(p, this.activeCourse);
     this.actor.position.set(p.x, p.y, p.z);
     this.impact = 0;
   }
-  private emit(
-    count: number,
-    geometry: T.BufferGeometry,
-    pick: (i: number) => T.Material,
-    velocity: (i: number) => T.Vector3,
-    options: { life: number; gravity: number; drag?: number; spin?: boolean; offset?: number },
-  ) {
-    for (let i = 0; i < count; i++) {
-      const mesh = new T.Mesh(geometry, pick(i));
-      mesh.position.copy(this.actor.position);
-      mesh.position.y += options.offset ?? 0;
-      this.scene.add(mesh);
-      this.particles.push({
-        mesh,
-        velocity: velocity(i),
-        life: options.life,
-        maxLife: options.life,
-        gravity: options.gravity,
-        drag: options.drag ?? 0,
-        spin: options.spin
-          ? new T.Vector3(Math.random() * 12 - 6, Math.random() * 12 - 6, Math.random() * 12 - 6)
-          : undefined,
-      });
-    }
-  }
   /** strength: 着地の強さなど0〜1。'complete' は全タルト収集の祝福。 */
   effect(type: GameEvent | 'complete', strength = 1) {
     if (type === 'dash' || type === 'fall' || type === 'recover') return;
-    const sparkle = () => this.particleMaterial;
+    const at = this.actor.position.clone(),
+      feet = at.clone().setY(at.y - 0.42);
+    const ring = (count: number, speed: number, up: number) => (i: number) => {
+      const a = (i / count) * Math.PI * 2;
+      return new T.Vector3(Math.cos(a) * speed, up, Math.sin(a) * speed);
+    };
+    const fountain = (spread: number, up: number) => (i: number) =>
+      new T.Vector3(Math.sin(i * 2.4) * spread, up + (i % 5) * 0.8, Math.cos(i * 2.4) * spread);
     if (type === 'land') {
       // 足元に広がる土ぼこりと、カメラの小さな沈み込み。
       this.impact = Math.max(this.impact, strength);
-      const count = 8 + Math.round(strength * 8);
-      this.emit(
+      const count = 10 + Math.round(strength * 10);
+      this.bursts.emit(
+        'dust',
+        feet,
         count,
-        this.particleGeometry,
-        () => this.dustMaterial,
-        (i) => {
-          const a = (i / count) * Math.PI * 2,
-            speed = 1.4 + strength * 2.4;
-          return new T.Vector3(Math.cos(a) * speed, 0.5 + strength * 0.8, Math.sin(a) * speed);
+        ring(count, 1.4 + strength * 2.6, 0.5 + strength * 0.8),
+        {
+          life: 0.6,
+          gravity: 2.5,
+          drag: 3.2,
+          colors: ['#fffaf0', '#f2e6cf'],
         },
-        { life: 0.55, gravity: 3, drag: 3.5, offset: -0.42 },
       );
       return;
     }
+    if (type === 'jump') {
+      this.bursts.emit('glow', feet, 18, ring(18, 3.4, 0.7), {
+        life: 0.55,
+        gravity: 2,
+        drag: 3,
+        colors: ['#ff7fbf', '#ffc2e0'],
+      });
+      return;
+    }
     if (type === 'goal') {
-      this.emit(
-        110,
-        this.confettiGeometry,
-        (i) => this.confettiMaterials[i % this.confettiMaterials.length],
+      this.bursts.emit(
+        'confetti',
+        at,
+        120,
         () => {
           const a = Math.random() * Math.PI * 2,
             out = 1.5 + Math.random() * 3.5;
           return new T.Vector3(Math.cos(a) * out, 5 + Math.random() * 5, Math.sin(a) * out);
         },
-        { life: 2.8, gravity: 5, drag: 1.1, spin: true },
+        {
+          life: 2.8,
+          gravity: 5,
+          drag: 1.1,
+          colors: ['#ff7eb6', '#ffd65c', '#6fe0ff', '#8cf29a', '#b79bff', '#ffffff'],
+        },
       );
     }
     if (type === 'complete')
-      this.emit(
-        46,
-        this.particleGeometry,
-        sparkle,
-        (i) => new T.Vector3(Math.sin(i * 2.4) * 4, 3 + (i % 7) * 0.8, Math.cos(i * 2.4) * 4),
-        { life: 1.6, gravity: 6 },
-      );
+      this.bursts.emit('glow', at, 50, fountain(4, 3), {
+        life: 1.6,
+        gravity: 6,
+        colors: ['#ffe27a', '#ffffff', '#ffb347'],
+      });
     if (type === 'checkpoint' && this.activeCourse) {
       // 通過した輪を一度大きく広げる。
       const nearest = this.activeCourse.checkpoints.reduce(
         (best, cp, i, all) =>
-          this.actor.position.distanceToSquared(new T.Vector3(cp.x, cp.y, cp.z)) <
-          this.actor.position.distanceToSquared(
-            new T.Vector3(all[best].x, all[best].y, all[best].z),
-          )
+          at.distanceToSquared(new T.Vector3(cp.x, cp.y, cp.z)) <
+          at.distanceToSquared(new T.Vector3(all[best].x, all[best].y, all[best].z))
             ? i
             : best,
         0,
       );
       this.checkpointPulse[nearest] = 1;
     }
-    const count = type === 'checkpoint' ? 22 : type === 'goal' ? 40 : 12;
-    this.emit(
-      count,
-      this.particleGeometry,
-      sparkle,
-      (i) => new T.Vector3(Math.sin(i * 2.4) * 2.8, 2 + (i % 5), Math.cos(i * 2.4) * 2.8),
-      { life: 1.2, gravity: 8 },
-    );
+    const count = type === 'checkpoint' ? 26 : type === 'goal' ? 40 : 14;
+    this.bursts.emit('glow', at, count, fountain(2.8, 2), {
+      life: 1.1,
+      gravity: 8,
+      colors: type === 'checkpoint' ? ['#8fffc0', '#ffffff'] : ['#ffe27a', '#fff6d0', '#ff9f5a'],
+    });
+  }
+  private adapt(dt: number) {
+    this.frameTimes.push(dt);
+    if (this.frameTimes.length > 90) this.frameTimes.shift();
+    if (this.time - this.adjustedAt < 2 || this.frameTimes.length < 60) return;
+    const average = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
+    const next =
+      average > 1 / 48
+        ? Math.max(1, this.pixelRatio - 0.25)
+        : average < 1 / 58 && this.time - this.adjustedAt > 8
+          ? Math.min(this.maxPixelRatio, this.pixelRatio + 0.25)
+          : this.pixelRatio;
+    if (next === this.pixelRatio) return;
+    this.pixelRatio = next;
+    this.adjustedAt = this.time;
+    this.frameTimes = [];
+    this.renderer.setPixelRatio(next);
+    this.resize();
   }
   draw(game: Physics, dt: number, menu: boolean) {
     this.time += dt;
+    this.adapt(dt);
     const p = game.position,
       v = game.ball.linvel();
     const target = new T.Vector3(p.x, p.y, p.z);
@@ -954,12 +770,28 @@ export class View {
       trim.emissive.set(color);
       trim.emissiveIntensity = rest > 0 ? 0.45 : 0.2;
     }
-    for (const rotor of this.rotors) rotor.rotation.z = -game.simulationTime * 0.45;
-    for (const wind of this.winds) {
-      const phase = (game.simulationTime * 0.7 + wind.phase) % 1;
-      wind.mesh.position.copy(wind.origin).addScaledVector(wind.direction, (phase - 0.5) * 12);
-      (wind.mesh.material as T.MeshBasicMaterial).opacity = Math.sin(phase * Math.PI) * 0.65;
+    if (this.winds) {
+      const m = new T.Matrix4(),
+        q = new T.Quaternion(),
+        up = new T.Vector3(0, 1, 0),
+        pos = new T.Vector3(),
+        one = new T.Vector3(1, 1, 1);
+      this.winds.items.forEach((wind, i) => {
+        const phase = (game.simulationTime * 0.7 + wind.phase) % 1;
+        pos.copy(wind.origin).addScaledVector(wind.direction, (phase - 0.5) * 12);
+        q.setFromAxisAngle(up, Math.atan2(wind.direction.x, wind.direction.z) + Math.PI / 2);
+        this.winds!.mesh.setMatrixAt(i, m.compose(pos, q, one));
+        const k = Math.sin(phase * Math.PI) * 0.7;
+        this.winds!.mesh.setColorAt(i, new T.Color(k, k, k));
+      });
+      this.winds.mesh.instanceMatrix.needsUpdate = true;
+      if (this.winds.mesh.instanceColor) this.winds.mesh.instanceColor.needsUpdate = true;
     }
+    for (const s of this.scrolling) s.texture.offset.y = -((this.time * s.speed) % 1);
+    if (this.jumpTop) this.jumpTop.emissiveIntensity = 0.35 + Math.sin(this.time * 5) * 0.15;
+    if (this.jumpBeams)
+      this.jumpBeams.uniforms.opacity.value = 0.35 + Math.sin(this.time * 3.5) * 0.1;
+    this.decorUpdate?.(this.time);
     this.actor.position.set(p.x, p.y, p.z);
     let ground: number | undefined;
     for (const s of platformsNear(game.course, p)) {
@@ -968,7 +800,9 @@ export class View {
     }
     this.shadow.position.set(p.x, (ground ?? 0) + 0.065, p.z);
     this.shadow.visible = ground !== undefined && p.y - ground < 5;
-    this.shadow.scale.setScalar(Math.max(0.4, 1 - Math.max(0, p.y - 0.52) * 0.12));
+    this.shadow.scale.setScalar(
+      Math.max(0.4, 1.15 - Math.max(0, p.y - (ground ?? 0) - 0.52) * 0.14),
+    );
     const rotation = game.ball.rotation();
     this.shell.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
     const speed = Math.hypot(v.x, v.z);
@@ -978,11 +812,10 @@ export class View {
       game.dashActive && game.round.phase === 'playing',
       dt,
       game.round.phase === 'playing' || menu,
+      game.grounded,
     );
     const dashVisual = this.dash.intensity;
-    this.ballMaterial.emissive.set('#48eaff');
-    this.ballMaterial.emissiveIntensity = dashVisual * 2.4;
-    this.ballMaterial.opacity = 0.18 + dashVisual * 0.17;
+    this.glass.uniforms.boost.value = dashVisual;
     if (speed > 0.25) {
       const desired = new T.Quaternion().setFromEuler(
         new T.Euler(dashVisual * 0.48, Math.atan2(v.x, v.z), 0, 'YXZ'),
@@ -1004,29 +837,39 @@ export class View {
       this.placeholder.position.y = moving
         ? Math.sin(this.time * Math.max(4, speed * 5)) * Math.min(0.035, speed * 0.01)
         : 0;
-    let tartIndex = 0;
-    for (const [id, tart] of this.tarts) {
-      tart.visible = !game.round.collected.has(id);
-      tart.rotation.y = this.time * 0.8;
-      tart.position.y =
-        tart.userData.floor + 0.85 + Math.sin(this.time * 2 + tart.position.z) * 0.09;
-      tart.scale.setScalar(tart.visible ? 1 : 0);
-      tart.updateMatrix();
-      for (let part = 0; part < 3; part++) {
-        tart.children[part].updateMatrix();
-        this.tartMatrix.copy(tart.matrix).multiply(tart.children[part].matrix);
-        this.tartInstances[part].setMatrixAt(tartIndex, this.tartMatrix);
-      }
-      tartIndex++;
+    if (this.tartHalo) {
+      const halo = this.tartHalo.geometry,
+        positions = halo.getAttribute('position') as T.BufferAttribute,
+        colors = halo.getAttribute('color') as T.BufferAttribute;
+      const q = new T.Quaternion(),
+        pos = new T.Vector3(),
+        up = new T.Vector3(0, 1, 0),
+        one = new T.Vector3(1, 1, 1),
+        zero = new T.Vector3();
+      this.tarts.forEach((t, i) => {
+        const visible = !game.round.collected.has(t.id);
+        pos.set(t.x, t.y + 0.85 + Math.sin(this.time * 2 + t.z) * 0.09, t.z);
+        q.setFromAxisAngle(up, this.time * 0.8);
+        this.tartMatrix.compose(pos, q, visible ? one : zero);
+        for (const part of this.tartParts)
+          part.mesh.setMatrixAt(i, new T.Matrix4().multiplyMatrices(this.tartMatrix, part.offset));
+        positions.setXYZ(i, pos.x, pos.y + 0.05, pos.z);
+        const k = visible ? 0.55 + Math.sin(this.time * 3 + i) * 0.15 : 0;
+        colors.setXYZ(i, k, k * 0.78, k * 0.35);
+      });
+      for (const part of this.tartParts) part.mesh.instanceMatrix.needsUpdate = true;
+      positions.needsUpdate = colors.needsUpdate = true;
     }
-    for (const instances of this.tartInstances) instances.instanceMatrix.needsUpdate = true;
     this.checkpoints.forEach((m, i) => {
-      (m.material as T.MeshStandardMaterial).color.set(
-        i <= game.round.checkpoint ? '#71c69d' : '#8eb3da',
-      );
+      const passed = i <= game.round.checkpoint;
+      const ring = m.material as T.MeshStandardMaterial;
+      ring.color.set(passed ? '#71c69d' : '#8eb3da');
+      ring.emissive.set(passed ? '#2f9a66' : '#4c7fae');
       const pulse = (this.checkpointPulse[i] = Math.max(0, (this.checkpointPulse[i] ?? 0) - dt));
       m.scale.setScalar(1 + (1 - pulse) * pulse * 2.4);
+      this.banners[i]?.material.color.set(passed ? '#b6ffcf' : '#ffffff');
     });
+    if (this.goalStar) this.goalStar.rotation.y = this.time * 1.6;
     if (game.round.phase === 'playing') this.routeCamera.update(p, game.course, dt, speed);
     // ゴール後は操作がないので、球の周りをゆっくり回って祝う。操作中は常に進路基準の向き。
     const finished = game.round.phase === 'finished';
@@ -1056,26 +899,18 @@ export class View {
       this.follow.y,
       this.follow.z - Math.cos(yaw) * 3,
     );
-    for (const particle of this.particles) {
-      particle.life -= dt;
-      particle.velocity.multiplyScalar(Math.exp(-particle.drag * dt));
-      particle.mesh.position.addScaledVector(particle.velocity, dt);
-      particle.velocity.y -= dt * particle.gravity;
-      if (particle.spin) {
-        particle.mesh.rotation.x += particle.spin.x * dt;
-        particle.mesh.rotation.y += particle.spin.y * dt;
-        particle.mesh.rotation.z += particle.spin.z * dt;
-        particle.mesh.scale.setScalar(Math.min(1, particle.life * 2));
-      } else
-        particle.mesh.scale.setScalar(
-          Math.max(0, Math.min(1, particle.life / (particle.maxLife * 0.8))),
-        );
-      if (particle.life <= 0) this.scene.remove(particle.mesh);
-    }
-    this.particles = this.particles.filter((p) => p.life > 0);
+    this.bursts.update(dt);
     const targetFov = 55 + dashVisual * 12;
     this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-dt * 12));
     this.camera.updateProjectionMatrix();
+    // 看板や札がカメラの目の前に来たら薄くして、視界をふさがない。
+    for (const s of [...this.signs, ...this.banners])
+      s.material.opacity = Math.min(
+        1,
+        Math.max(0, (s.position.distanceTo(this.camera.position) - 4) / 5),
+      );
+    this.sky.update(this.camera, this.time);
+    this.ambient.update(this.camera, this.time);
     this.renderer.render(this.scene, this.camera);
   }
   resize() {
