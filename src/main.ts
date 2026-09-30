@@ -38,6 +38,7 @@ let pageVersion = 0;
 let lastSection = '';
 let progress: RouteProgress;
 let celebration: number | undefined;
+const lastToast: Partial<Record<GameEvent, number>> = {};
 function syncSettings() {
   input.mode = save.settings.mode;
   input.sensitivity = save.settings.sensitivity;
@@ -200,7 +201,7 @@ function showPlay() {
         `<i class="tick ${i <= game.round.checkpoint ? 'passed' : ''}" style="left:${(ratio * 100).toFixed(1)}%"></i>`,
     )
     .join('');
-  ui.innerHTML = `<div class="hud"><div class="hud-stats"><div><small>TIME</small><strong id="time">00:00.00</strong></div><div><small>TARTS</small><strong id="tarts">${game.round.collected.size} / ${game.course.tarts.length}</strong></div><div class="progress" role="progressbar" aria-label="コースの進み具合"><b id="progress"></b>${ticks}<i class="tick goal" style="left:100%"></i></div></div><button id="pause" class="pause" aria-label="中断と設定">Ⅱ</button></div><div class="course-caption"><span>AREA 0${selected + 1}</span>${game.course.name}</div>`;
+  ui.innerHTML = `<div class="hud"><div class="hud-stats"><div><small>TIME</small><strong id="time">00:00.00</strong></div><div><small>TARTS</small><strong id="tarts">${game.round.collected.size} / ${game.course.tarts.length}</strong></div><div class="progress" aria-hidden="true"><b id="progress" style="width:${(progress.ratio * 100).toFixed(1)}%"></b>${ticks}<i class="tick goal" style="left:100%"></i></div></div><button id="pause" class="pause" aria-label="中断と設定">Ⅱ</button></div><div class="course-caption"><span>AREA 0${selected + 1}</span>${game.course.name}</div>`;
   hudTime = document.getElementById('time');
   hudTarts = document.getElementById('tarts');
   hudProgress = document.getElementById('progress');
@@ -208,7 +209,9 @@ function showPlay() {
 }
 function pause(message = '') {
   if (!['playing', 'falling'].includes(game?.round.phase)) return;
+  // 背景へ移ると描画ループが止まるため、持続音はここで明示的に消す。
   sound.updateDash(false, 0);
+  sound.updateRolling(false, 0);
   sound.pauseBgm();
   beforePause = game.round.phase;
   game.round.phase = 'paused';
@@ -322,7 +325,15 @@ function event(type: GameEvent) {
     fall: '大丈夫。少し前から、もう一度。',
     recover: 'ここから、もう一度。',
   };
-  if (text[type]) toast(text[type]!);
+  // 連続するダッシュ・ジャンプで案内が埋もれないよう、同じ文言は5秒に1回まで。
+  const at = performance.now();
+  if (
+    text[type] &&
+    at - (lastToast[type] ?? -Infinity) > (type === 'dash' || type === 'jump' ? 5000 : 0)
+  ) {
+    lastToast[type] = at;
+    toast(text[type]!);
+  }
   if (type === 'tart') {
     // タルトは頻繁に取るので、案内の文字は出さずにHUDの数字を弾ませる。
     bump(hudTarts);

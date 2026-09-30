@@ -148,3 +148,45 @@ it('the platform grid finds exactly the same supports as scanning every platform
         expect(hits(platformsNear(course, q)), course.name).toEqual(hits(course.platforms));
       }
 });
+
+it('every course starts on an island with ground behind and beside the ball', () => {
+  for (const course of courses)
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2,
+        q = { x: course.start.x + Math.cos(a) * 3, z: course.start.z + Math.sin(a) * 3 };
+      expect(
+        course.platforms.some((p) => {
+          const y = surfaceHeight(q, p);
+          return y !== undefined && Math.abs(y - (course.start.y - 0.6)) < 0.1;
+        }),
+        `${course.name} ${k}`,
+      ).toBe(true);
+    }
+});
+
+it('roads arriving at an island reach its height, so the rim never becomes a wall', () => {
+  for (const course of courses)
+    for (const deck of course.platforms.filter((p) => p.shape && !p.motion)) {
+      const r = (Math.min(deck.w, deck.d) / 2) * (deck.shape === 'hex' ? 0.86 : 1) + 0.05;
+      course.route.forEach((p, i) => {
+        if (Math.hypot(p.x - deck.x, p.z - deck.z) > 1 || Math.abs(p.y - deck.y) > 0.5) return;
+        // 島へ入ってくる側の、縁のすぐ外の路面。下り（島から降りる側）は段差でも問題ない。
+        const before = course.route
+          .slice(0, i)
+          .reverse()
+          .find((q) => Math.hypot(q.x - deck.x, q.z - deck.z) > r + 0.5);
+        if (!before) return;
+        const d = Math.hypot(before.x - deck.x, before.z - deck.z),
+          q = {
+            x: deck.x + ((before.x - deck.x) / d) * r,
+            z: deck.z + ((before.z - deck.z) / d) * r,
+          };
+        const heights = course.platforms
+          .filter((road) => road.vertices)
+          .map((road) => surfaceHeight(q, road))
+          .filter((y): y is number => y !== undefined);
+        if (heights.length)
+          expect(Math.max(...heights), `${course.name} ${deck.id}`).toBeGreaterThan(deck.y - 0.1);
+      });
+    }
+});

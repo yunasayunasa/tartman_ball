@@ -506,7 +506,7 @@ export class View {
     goal.add(banner);
     goal.position.set(course.goal.x, course.goal.y, course.goal.z);
     this.level.add(goal);
-    this.flag(course.start.x - 2.8, course.start.z, 'START', course.color);
+    this.flag(course.start.x - 2.8, course.start.z, 'START', course.color, course.start.y - 0.6);
     this.snap(course.start);
     this.batchStatic();
   }

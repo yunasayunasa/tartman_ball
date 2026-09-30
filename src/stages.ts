@@ -183,6 +183,9 @@ class Stage {
   }
   finish(p: Vec, surface: Surface) {
     this.deck(p, 14, 14, surface, 'disc');
+    // スタートにも島を置く。道の端から始まると、出だしで少し後ろへ傾けただけで落ちる。
+    const start = this.course.route[0];
+    this.deck(start, 12, 12, this.course.platforms[0].surface ?? surface, 'disc');
     this.course.goal = { ...p };
     this.course.tarts = this.course.tarts.filter(
       (t) => !this.course.pads.some((p) => Math.hypot(p.x - t.x, p.z - t.z) < 3),
@@ -235,9 +238,13 @@ function desert() {
   s.bounce(jump, landing);
   s.deck(landing, 12, 12, 'stone', 'disc');
   s.route([jump, landing]);
-  s.road([landing, point(-40, -430, 0), point(0, -480, -5), point(40, -525, 0)], 16, 'sand', {
-    trough: 2.6,
-  });
+  // 谷から上り切ってからゴールの島へ入る。島の手前で路面が低いと縁が壁になって止まる。
+  s.road(
+    [landing, point(-40, -430, 0), point(0, -480, -5), point(26, -510, 0), point(40, -525, 0)],
+    16,
+    'sand',
+    { trough: 2.6 },
+  );
   return s.finish(point(40, -525, 0), 'stone');
 }
 
